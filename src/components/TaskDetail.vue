@@ -1,0 +1,95 @@
+<script setup lang="ts">
+import { watch, computed } from 'vue'
+import { useTaskStore } from '../stores/taskStore'
+import type { Task } from '../types'
+
+const props = defineProps<{ task: Task | null }>()
+const emit = defineEmits<{ close: []; retry: [taskId: string] }>()
+
+const taskStore = useTaskStore()
+
+watch(() => props.task, (task) => {
+  if (task) {
+    taskStore.loadTaskLogs(task.id)
+  }
+})
+
+const logs = computed(() => {
+  if (!props.task) return []
+  return taskStore.taskLogs[props.task.id] || []
+})
+
+const liveOutput = computed(() => {
+  if (!props.task) return []
+  return taskStore.liveLogs[props.task.id] || []
+})
+
+function formatDate(date: string | null) {
+  if (!date) return '—'
+  return new Date(date).toLocaleString()
+}
+</script>
+
+<template>
+  <div v-if="task" class="modal-overlay" @click.self="emit('close')">
+    <div class="modal task-detail-modal">
+      <div class="modal-header">
+        <h2>Task Detail</h2>
+        <button class="btn-icon" @click="emit('close')">✕</button>
+      </div>
+      <div class="modal-body">
+        <h3>{{ task.title }}</h3>
+        <p class="task-description">{{ task.description }}</p>
+
+        <div class="detail-meta">
+          <div class="meta-row">
+            <span class="meta-label">Status</span>
+            <span :class="`badge badge-${task.status}`">{{ task.status.replace('_', ' ') }}</span>
+          </div>
+          <div class="meta-row" v-if="task.exit_code !== null">
+            <span class="meta-label">Exit Code</span>
+            <span>{{ task.exit_code }}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label">Created</span>
+            <span>{{ formatDate(task.created_at) }}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label">Started</span>
+            <span>{{ formatDate(task.started_at) }}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label">Completed</span>
+            <span>{{ formatDate(task.completed_at) }}</span>
+          </div>
+        </div>
+
+        <div v-if="task.status === 'in_progress' && liveOutput.length > 0" class="log-section">
+          <h4>Live Output</h4>
+          <div class="log-output">
+            <div v-for="(line, i) in liveOutput" :key="i" class="log-line log-live">{{ line }}</div>
+          </div>
+        </div>
+
+        <div v-if="logs.length > 0" class="log-section">
+          <h4>Logs</h4>
+          <div class="log-output">
+            <div
+              v-for="log in logs"
+              :key="log.id"
+              :class="`log-line log-${log.log_type}`"
+            >{{ log.content }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button
+          v-if="task.status === 'failed'"
+          class="btn btn-primary"
+          @click="emit('retry', task.id)"
+        >Retry</button>
+        <button class="btn btn-secondary" @click="emit('close')">Close</button>
+      </div>
+    </div>
+  </div>
+</template>
