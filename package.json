@@ -1,7 +1,7 @@
 {
   "name": "do-it-claude",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,12 +11,16 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-shell": "^2.3.5",
+    "@types/sortablejs": "^1.15.9",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "pinia": "^3.0.4",
+    "sortablejs": "^1.15.7",
     "vue": "^3.5.13",
-    "vue-router": "^4.6.4",
-    "vuedraggable": "^4.1.0"
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
