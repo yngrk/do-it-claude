@@ -398,7 +398,6 @@ function formatDate(date: string | null) {
               <path d="M2.5 6L5 8.5L9.5 3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             <span class="hi-name">{{ task.title }}</span>
-            <button class="hi-retry" @click.stop="moveToBacklog(task.id)">To Backlog</button>
             <span class="hi-time">{{ formatDate(task.completed_at) }}</span>
           </div>
           <div
@@ -423,6 +422,7 @@ function formatDate(date: string | null) {
       :task="selectedTask"
       @close="selectedTask = null"
       @retry="retryTask($event)"
+      @move-to-backlog="moveToBacklog($event)"
     />
 
     <AddTaskDialog

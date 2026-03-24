@@ -5,7 +5,7 @@ import { TASK_TAGS } from '../types'
 import type { Task, TaskTag } from '../types'
 
 const props = defineProps<{ task: Task | null }>()
-const emit = defineEmits<{ close: []; retry: [taskId: string] }>()
+const emit = defineEmits<{ close: []; retry: [taskId: string]; 'move-to-backlog': [taskId: string] }>()
 
 const taskStore = useTaskStore()
 
@@ -189,6 +189,11 @@ function formatDate(date: string | null) {
             class="btn btn-primary"
             @click="emit('retry', task.id)"
           >Retry</button>
+          <button
+            v-if="task.status === 'done' || task.status === 'failed'"
+            class="btn btn-secondary"
+            @click="emit('move-to-backlog', task.id)"
+          >To Backlog</button>
           <button class="btn btn-secondary" @click="emit('close')">Close</button>
         </template>
       </div>
