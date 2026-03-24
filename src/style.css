@@ -4,41 +4,41 @@
 
 /* --- CSS Variables ----------------------------------------- */
 :root {
-  /* Colors — pure black & white, high contrast */
-  --bg-base:      #000000;
-  --bg-surface:   #0a0a0a;
-  --bg-terminal:  var(--bg-terminal);
-  --bg-card:      #111111;
-  --bg-elevated:  #1a1a1a;
-  --bg-hover:     #222222;
+  /* Colors — dark with clear layer separation */
+  --bg-base:      #09090b;
+  --bg-surface:   #16161a;
+  --bg-terminal:  #0e0e10;
+  --bg-card:      #1f1f24;
+  --bg-elevated:  #2c2c33;
+  --bg-hover:     #38383f;
 
   --accent:        #ffffff;
-  --accent-glow:   rgba(255, 255, 255, 0.15);
+  --accent-glow:   rgba(255, 255, 255, 0.18);
 
   --success:  #22c55e;
   --warning:  #eab308;
   --error:    #f87171;
   --danger:   #f87171;
 
-  --text-primary:   #ffffff;
-  --text-secondary: #b0b0b0;
-  --text-muted:     #777777;
+  --text-primary:   #f5f5f5;
+  --text-secondary: #a1a1aa;
+  --text-muted:     #63636e;
 
-  --border:       rgba(255, 255, 255, 0.1);
-  --border-hover: rgba(255, 255, 255, 0.2);
-  --hover-overlay: rgba(255, 255, 255, 0.08);
+  --border:       rgba(255, 255, 255, 0.12);
+  --border-hover: rgba(255, 255, 255, 0.25);
+  --hover-overlay: rgba(255, 255, 255, 0.07);
 
   /* Badge colors — 4 status colors + neutral */
   --badge-backlog-bg:      rgba(255, 255, 255, 0.06);
-  --badge-backlog-color:   #999999;
+  --badge-backlog-color:   #a1a1aa;
   --badge-queued-bg:       rgba(59, 130, 246, 0.15);
-  --badge-queued-color:    #3b82f6;
+  --badge-queued-color:    #60a5fa;
   --badge-in_progress-bg:  rgba(234, 179, 8, 0.15);
-  --badge-in_progress-color: #eab308;
+  --badge-in_progress-color: #facc15;
   --badge-done-bg:         rgba(34, 197, 94, 0.15);
-  --badge-done-color:      #22c55e;
+  --badge-done-color:      #4ade80;
   --badge-failed-bg:       rgba(239, 68, 68, 0.15);
-  --badge-failed-color:    #f87171;
+  --badge-failed-color:    #fb7185;
 
   /* Radius */
   --radius-pill:   100px;
@@ -50,9 +50,9 @@
   --radius-xs:     4px;
 
   /* Shadows — crisp black */
-  --shadow-card:       0 2px 12px rgba(0, 0, 0, 0.5);
-  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.7);
-  --shadow-modal:      0 24px 64px rgba(0, 0, 0, 0.8), 0 0 0 1px var(--border);
+  --shadow-card:       0 2px 12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.1);
+  --shadow-modal:      0 24px 64px rgba(0, 0, 0, 0.85), 0 0 0 1px var(--border);
 
   /* No gradient — flat accent */
   --gradient-accent: #ffffff;
@@ -76,11 +76,11 @@
 
 /* --- Light Theme ------------------------------------------- */
 :root[data-theme="light"] {
-  --bg-base:      #f5f5f5;
-  --bg-surface:   #ffffff;
+  --bg-base:      #f0f0f2;
+  --bg-surface:   #f8f8fa;
   --bg-card:      #ffffff;
-  --bg-elevated:  #ebebeb;
-  --bg-hover:     #e0e0e0;
+  --bg-elevated:  #e8e8ec;
+  --bg-hover:     #dcdce2;
 
   --accent:        #111111;
   --accent-glow:   rgba(0, 0, 0, 0.1);
@@ -90,16 +90,16 @@
   --error:    #dc2626;
   --danger:   #dc2626;
 
-  --text-primary:   #111111;
-  --text-secondary: #555555;
-  --text-muted:     #888888;
+  --text-primary:   #0c0c0e;
+  --text-secondary: #4a4a55;
+  --text-muted:     #8a8a96;
 
-  --border:       rgba(0, 0, 0, 0.1);
-  --border-hover: rgba(0, 0, 0, 0.2);
+  --border:       rgba(0, 0, 0, 0.12);
+  --border-hover: rgba(0, 0, 0, 0.22);
   --hover-overlay: rgba(0, 0, 0, 0.05);
 
   --badge-backlog-bg:      rgba(0, 0, 0, 0.06);
-  --badge-backlog-color:   #666666;
+  --badge-backlog-color:   #5a5a66;
   --badge-queued-bg:       rgba(37, 99, 235, 0.1);
   --badge-queued-color:    #2563eb;
   --badge-in_progress-bg:  rgba(202, 138, 4, 0.1);
@@ -109,13 +109,13 @@
   --badge-failed-bg:       rgba(220, 38, 38, 0.1);
   --badge-failed-color:    #dc2626;
 
-  --shadow-card:       0 1px 4px rgba(0, 0, 0, 0.06);
-  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.1);
-  --shadow-modal:      0 24px 64px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0,0,0,0.06);
+  --shadow-card:       0 1px 4px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0,0,0,0.04);
+  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0,0,0,0.06);
+  --shadow-modal:      0 24px 64px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0,0,0,0.06);
 
   --gradient-accent: #111111;
 
-  --bg-terminal:  #f0f0f0;
+  --bg-terminal:  #ececf0;
 
   --glass-bg:     rgba(255, 255, 255, 0.8);
   --glass-border: rgba(0, 0, 0, 0.08);
@@ -394,6 +394,11 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
   color: var(--text-muted);
   opacity: 0;
   transition: var(--transition);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
 }
 
 .tab:hover .tab-close {
@@ -609,7 +614,6 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
   margin-bottom: 14px;
   word-break: break-all;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  opacity: 0.7;
 }
 
 .project-card-stats {
@@ -728,7 +732,7 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 .column-title {
   font-weight: 600;
   font-size: 0.8125rem;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -736,7 +740,7 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 .task-count {
   font-size: 0.75rem;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   background-color: var(--hover-overlay);
   padding: 2px 9px;
   border-radius: var(--radius-pill);
@@ -761,7 +765,7 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
   padding: 12px 14px;
   cursor: pointer;
   transition: var(--transition);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  box-shadow: var(--shadow-card);
   position: relative;
   overflow: hidden;
 }
@@ -811,7 +815,7 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .detail-value {
@@ -839,7 +843,7 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 }
 
 .log-stdout {
-  color: var(--text-muted);
+  color: var(--text-primary);
 }
 
 .log-stderr {
@@ -882,8 +886,8 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 }
 
 .modal {
-  background-color: var(--bg-card);
-  border: 1px solid var(--hover-overlay);
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border-hover);
   border-radius: var(--radius-modal);
   box-shadow: var(--shadow-modal);
   width: 500px;
@@ -935,13 +939,13 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 
 .form-group label {
   font-size: 0.8125rem;
-  font-weight: 500;
-  color: var(--text-secondary);
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .form-group input,
 .form-group textarea {
-  background-color: var(--bg-surface);
+  background-color: var(--bg-base);
   border: 1px solid var(--border);
   border-radius: var(--radius-input);
   padding: 10px 14px;
@@ -1023,7 +1027,7 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 
 .empty-state {
   text-align: center;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   padding: 64px 0;
   font-size: 0.9375rem;
   line-height: 1.7;
@@ -1041,7 +1045,7 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 
 /* --- Misc -------------------------------------------------- */
 .form-input {
-  background-color: var(--bg-surface);
+  background-color: var(--bg-base);
   border: 1px solid var(--border);
   border-radius: var(--radius-input);
   padding: 10px 14px;

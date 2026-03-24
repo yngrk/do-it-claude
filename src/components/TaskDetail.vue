@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { watch, computed } from 'vue'
 import { useTaskStore } from '../stores/taskStore'
+import { TASK_TAGS } from '../types'
 import type { Task } from '../types'
 
 const props = defineProps<{ task: Task | null }>()
@@ -24,6 +25,11 @@ const liveOutput = computed(() => {
   return taskStore.liveLogs[props.task.id] || []
 })
 
+const tagInfo = computed(() => {
+  if (!props.task?.tag) return null
+  return TASK_TAGS.find(t => t.value === props.task!.tag) ?? null
+})
+
 function formatDate(date: string | null) {
   if (!date) return '—'
   return new Date(date).toLocaleString()
@@ -43,6 +49,9 @@ function formatDate(date: string | null) {
       </div>
       <div class="modal-body">
         <h3>{{ task.title }}</h3>
+        <span v-if="tagInfo" class="detail-tag" :style="{ background: tagInfo.color + '18', color: tagInfo.color, borderColor: tagInfo.color + '33' }">
+          {{ tagInfo.label }}
+        </span>
         <p class="task-description">{{ task.description }}</p>
 
         <div class="detail-meta">
@@ -104,6 +113,17 @@ function formatDate(date: string | null) {
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
   font-size: 0.8rem;
   position: relative;
+}
+
+.detail-tag {
+  display: inline-flex;
+  padding: 2px 10px;
+  border-radius: 100px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid;
+  margin-top: 4px;
 }
 
 .detail-label {

@@ -62,43 +62,10 @@ pub fn init_git(path: String) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Default)]
-#[serde(default)]
-pub struct ProjectStats {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub cache_creation_tokens: u64,
-    pub cost_usd: f64,
-    pub duration_ms: u64,
-    pub num_turns: u64,
-    pub tasks_completed: u64,
-    pub tasks_failed: u64,
-}
-
-const STATS_FILE: &str = ".do-it-claude-stats.json";
-
 #[tauri::command]
-pub fn load_project_stats(path: String) -> Result<ProjectStats, String> {
-    let file_path = std::path::Path::new(&path).join(STATS_FILE);
-    if !file_path.exists() {
-        return Ok(ProjectStats::default());
-    }
-    let data = std::fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&data).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn save_project_stats(path: String, stats: ProjectStats) -> Result<(), String> {
-    let file_path = std::path::Path::new(&path).join(STATS_FILE);
-    let data = serde_json::to_string_pretty(&stats).map_err(|e| e.to_string())?;
-    std::fs::write(&file_path, data).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn create_task(db: State<DbConn>, project_id: String, title: String, description: String) -> Result<Task, String> {
+pub fn create_task(db: State<DbConn>, project_id: String, title: String, description: String, tag: Option<String>) -> Result<Task, String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
-    db::create_task(&conn, &project_id, &title, &description).map_err(|e| e.to_string())
+    db::create_task(&conn, &project_id, &title, &description, tag.as_deref()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -265,4 +232,67 @@ pub fn close_pty(
     session_id: String,
 ) -> Result<(), String> {
     pty::close_pty(&sessions, &session_id)
+}
+
+#[derive(serde::Serialize)]
+pub struct GitCommit {
+    pub hash: String,
+    pub message: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct GitInfo {
+    pub branch: String,
+    pub changes: u32,
+    pub commits: Vec<GitCommit>,
+}
+
+#[tauri::command]
+pub fn get_git_info(path: String) -> Result<GitInfo, String> {
+    // Get current branch
+    let branch = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(&path)
+        .output()
+        .map_err(|e| e.to_string())
+        .and_then(|o| if o.status.success() {
+            String::from_utf8(o.stdout).map(|s| s.trim().to_string()).map_err(|e| e.to_string())
+        } else {
+            Ok(String::from("unknown"))
+        })?;
+
+    // Count changes
+    let changes = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&path)
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .count() as u32
+        })
+        .unwrap_or(0);
+
+    // Recent commits
+    let commits = std::process::Command::new("git")
+        .args(["log", "--oneline", "-10", "--format=%h\t%s"])
+        .current_dir(&path)
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|line| {
+                    let mut parts = line.splitn(2, '\t');
+                    GitCommit {
+                        hash: parts.next().unwrap_or("").to_string(),
+                        message: parts.next().unwrap_or("").to_string(),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(GitInfo { branch, changes, commits })
 }

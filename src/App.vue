@@ -40,7 +40,7 @@ function selectProject(id: string) {
   router.push(`/project/${id}`)
 }
 
-function closeProject(id: string, e: MouseEvent) {
+async function closeProject(id: string, e: MouseEvent) {
   e.stopPropagation()
   // Navigate away if closing the active tab
   if (activeProjectId.value === id) {
@@ -51,6 +51,7 @@ function closeProject(id: string, e: MouseEvent) {
       router.push('/')
     }
   }
+  await projectStore.deleteProject(id)
 }
 
 const activeProject = computed(() => {
@@ -88,7 +89,7 @@ async function handleProjectCreated() {
           @click="selectProject(project.id)"
         >
           <span class="tab-label">{{ project.name }}</span>
-          <span class="tab-close" @click="closeProject(project.id, $event)" title="Close tab">
+          <span class="tab-close" role="button" @click="closeProject(project.id, $event)" title="Close tab">
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
               <path d="M2 2L8 8M8 2L2 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
             </svg>

@@ -71,6 +71,11 @@ pub fn new_stop_flags() -> StopFlags {
 }
 
 #[derive(Clone, Serialize)]
+struct QueueStoppedPayload {
+    project_id: String,
+}
+
+#[derive(Clone, Serialize)]
 struct TaskStartedPayload {
     task_id: String,
     project_id: String,
@@ -89,18 +94,6 @@ struct TaskOutputPayload {
     task_id: String,
     content: String,
     log_type: String,
-}
-
-#[derive(Clone, Serialize)]
-struct TaskStatsPayload {
-    task_id: String,
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_read_tokens: u64,
-    cache_creation_tokens: u64,
-    cost_usd: f64,
-    duration_ms: u64,
-    num_turns: u64,
 }
 
 pub fn new_running_processes() -> RunningProcesses {
@@ -286,19 +279,6 @@ pub async fn start_queue(
                                 }
                             }
                             "result" => {
-                                // Extract usage stats from result event
-                                let usage = json.get("usage");
-                                let _ = app_clone.emit("task-stats", TaskStatsPayload {
-                                    task_id: task_id_clone.clone(),
-                                    input_tokens: usage.and_then(|u| u.get("input_tokens")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                    output_tokens: usage.and_then(|u| u.get("output_tokens")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                    cache_read_tokens: usage.and_then(|u| u.get("cache_read_input_tokens")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                    cache_creation_tokens: usage.and_then(|u| u.get("cache_creation_input_tokens")).and_then(|v| v.as_u64()).unwrap_or(0),
-                                    cost_usd: json.get("total_cost_usd").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                    duration_ms: json.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0),
-                                    num_turns: json.get("num_turns").and_then(|v| v.as_u64()).unwrap_or(0),
-                                });
-
                                 // Also log the result text
                                 if let Some(result_text) = json.get("result").and_then(|v| v.as_str()) {
                                     let conn = db_clone.lock().unwrap();
@@ -383,6 +363,10 @@ pub async fn start_queue(
             status: status.to_string(),
         });
     }
+
+    let _ = app.emit("queue-stopped", QueueStoppedPayload {
+        project_id: project_id.clone(),
+    });
 }
 
 pub async fn stop_queue(processes: RunningProcesses, project_id: &str) {

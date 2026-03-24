@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref, computed, watch, nextTick } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { useTaskStore } from '../stores/taskStore'
 import { useProjectStore } from '../stores/projectStore'
 import KanbanColumn from '../components/KanbanColumn.vue'
@@ -21,9 +22,7 @@ const outputEl = ref<HTMLElement | null>(null)
 const isGit = ref<boolean | null>(null)
 const initingGit = ref(false)
 const outputMaximized = ref(false)
-const showProjectSettings = ref(false)
-const projectEffort = ref('high')
-const projectMaxTurns = ref<number | null>(null)
+const gitInfo = ref<{ branch: string; changes: number; commits: { hash: string; message: string }[] } | null>(null)
 
 const activeProject = computed(() =>
   projectStore.projects.find(p => p.id === projectId.value) ?? null
@@ -48,14 +47,34 @@ async function initGit() {
 function loadProject() {
   taskStore.loadTasks(projectId.value)
   checkGitStatus()
-  if (activeProject.value) {
-    taskStore.loadProjectStats(activeProject.value.path)
-  }
+  loadGitInfo()
   queueRunning.value = false
   outputMaximized.value = false
 }
 
+async function loadGitInfo() {
+  if (!activeProject.value) return
+  try {
+    gitInfo.value = await invoke('get_git_info', { path: activeProject.value.path })
+  } catch {
+    gitInfo.value = null
+  }
+}
+
 onMounted(loadProject)
+
+const gitInterval = setInterval(() => {
+  if (activeProject.value) loadGitInfo()
+}, 30000)
+
+onUnmounted(() => clearInterval(gitInterval))
+
+listen<{ project_id: string }>('queue-stopped', (event) => {
+  if (event.payload.project_id === projectId.value) {
+    queueRunning.value = false
+    loadGitInfo()
+  }
+})
 
 watch(projectId, loadProject)
 
@@ -120,11 +139,6 @@ async function retryTask(taskId: string) {
   await handleTaskMoved(taskId, 'queued', 0)
 }
 
-function formatTokens(n: number) {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k'
-  return n.toString()
-}
 
 function formatDate(date: string | null) {
   if (!date) return ''
@@ -154,110 +168,81 @@ function formatDate(date: string | null) {
 
       <!-- Top row: stats + running task -->
       <div class="top-row">
-        <!-- Stats panel -->
         <div class="stats-panel">
-          <div class="stats-header">
-            <span>Stats</span>
-            <button class="stats-cog" @click="showProjectSettings = !showProjectSettings" title="Project settings">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M6 7.5C6.82843 7.5 7.5 6.82843 7.5 6C7.5 5.17157 6.82843 4.5 6 4.5C5.17157 4.5 4.5 5.17157 4.5 6C4.5 6.82843 5.17157 7.5 6 7.5Z" stroke="currentColor" stroke-width="1"/>
-                <path d="M9.79 7.6C9.71 7.76 9.71 7.96 9.81 8.12L10.07 8.54C10.18 8.74 10.14 8.99 9.97 9.13L9.13 9.82C8.97 9.95 8.74 9.95 8.58 9.83L8.15 9.54C7.99 9.44 7.81 9.41 7.64 9.48C7.47 9.55 7.3 9.61 7.12 9.65C6.95 9.7 6.81 9.84 6.78 10.03L6.7 10.53C6.66 10.75 6.47 10.92 6.24 10.92H5.17C4.94 10.92 4.75 10.75 4.71 10.53L4.63 10.03C4.6 9.84 4.46 9.7 4.29 9.65C4.11 9.61 3.94 9.55 3.77 9.48C3.6 9.41 3.41 9.44 3.26 9.54L2.83 9.83C2.67 9.95 2.44 9.95 2.28 9.82L1.44 9.13C1.27 9 1.22 8.74 1.34 8.54L1.6 8.12C1.7 7.96 1.7 7.76 1.62 7.6C1.56 7.43 1.51 7.26 1.47 7.08C1.43 6.9 1.3 6.76 1.12 6.72L0.62 6.63C0.39 6.59 0.23 6.4 0.23 6.17V5.17C0.23 4.94 0.39 4.75 0.62 4.71L1.12 4.62C1.3 4.59 1.43 4.45 1.47 4.27C1.51 4.1 1.56 3.93 1.62 3.77C1.7 3.59 1.7 3.4 1.6 3.24L1.34 2.81C1.22 2.62 1.27 2.36 1.44 2.23L2.28 1.54C2.44 1.41 2.67 1.41 2.83 1.53L3.26 1.82C3.41 1.92 3.6 1.94 3.77 1.88C3.94 1.81 4.11 1.75 4.29 1.7C4.46 1.66 4.6 1.52 4.63 1.33L4.71 0.83C4.75 0.6 4.94 0.44 5.17 0.44H6.24C6.47 0.44 6.66 0.6 6.7 0.83L6.78 1.33C6.81 1.52 6.95 1.66 7.12 1.7C7.3 1.75 7.47 1.81 7.64 1.88C7.81 1.94 7.99 1.92 8.15 1.82L8.58 1.53C8.74 1.41 8.97 1.41 9.13 1.54L9.97 2.23C10.14 2.36 10.18 2.62 10.07 2.81L9.81 3.24C9.71 3.4 9.71 3.59 9.79 3.77C9.85 3.93 9.91 4.1 9.95 4.27C9.99 4.45 10.12 4.59 10.3 4.62L10.8 4.71C11.03 4.75 11.19 4.94 11.19 5.17V6.17C11.19 6.4 11.03 6.59 10.8 6.63L10.3 6.72C10.12 6.76 9.99 6.9 9.95 7.08C9.91 7.26 9.85 7.43 9.79 7.6Z" stroke="currentColor" stroke-width="0.9"/>
+          <div class="git-info" v-if="gitInfo">
+            <div class="git-header">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="git-icon">
+                <circle cx="4" cy="4" r="1.5" stroke="currentColor" stroke-width="1.2"/>
+                <circle cx="10" cy="4" r="1.5" stroke="currentColor" stroke-width="1.2"/>
+                <circle cx="4" cy="10" r="1.5" stroke="currentColor" stroke-width="1.2"/>
+                <path d="M4 5.5V8.5" stroke="currentColor" stroke-width="1.2"/>
+                <path d="M10 5.5V7C10 7.55 9.55 8 9 8H4" stroke="currentColor" stroke-width="1.2"/>
               </svg>
-            </button>
+              <span class="git-branch">{{ gitInfo.branch }}</span>
+              <span v-if="gitInfo.changes > 0" class="git-changes">{{ gitInfo.changes }} change{{ gitInfo.changes === 1 ? '' : 's' }}</span>
+              <button class="git-refresh-btn" @click="loadGitInfo" title="Refresh">
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                  <path d="M1.5 6A4.5 4.5 0 0 1 9.2 3M10.5 6A4.5 4.5 0 0 1 2.8 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                  <path d="M9.2 1V3H7.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M2.8 11V9H4.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </div>
+            <div class="git-commits">
+              <div v-if="gitInfo.commits.length === 0" class="git-empty">No commits yet.</div>
+              <div v-for="c in gitInfo.commits" :key="c.hash" class="git-commit">
+                <span class="git-hash">{{ c.hash }}</span>
+                <span class="git-msg">{{ c.message }}</span>
+              </div>
+            </div>
           </div>
-          <!-- Stats view -->
-          <template v-if="!showProjectSettings">
-            <div class="tiles">
-              <div class="tile tile-accent">
-                <span class="tile-value">${{ taskStore.totalStats.cost_usd.toFixed(2) }}</span>
-                <span class="tile-label">Cost</span>
-              </div>
-              <div class="tile">
-                <span class="tile-value">{{ taskStore.totalStats.tasks_completed }}</span>
-                <span class="tile-label">Done</span>
-              </div>
-              <div class="tile">
-                <span class="tile-value">{{ taskStore.totalStats.tasks_failed }}</span>
-                <span class="tile-label">Failed</span>
-              </div>
-              <div class="tile">
-                <span class="tile-value">{{ taskStore.totalStats.num_turns }}</span>
-                <span class="tile-label">Turns</span>
-              </div>
-              <div class="tile">
-                <span class="tile-value">{{ formatTokens(taskStore.totalStats.output_tokens) }}</span>
-                <span class="tile-label">Out tokens</span>
-              </div>
-              <div class="tile">
-                <span class="tile-value">{{ formatTokens(taskStore.totalStats.input_tokens) }}</span>
-                <span class="tile-label">In tokens</span>
-              </div>
-            </div>
-          </template>
-
-          <!-- Project settings view -->
-          <template v-else>
-            <div class="psettings">
-              <div class="psettings-row">
-                <span class="psettings-label">Effort</span>
-                <div class="psettings-toggle">
-                  <span v-for="level in ['low', 'medium', 'high', 'max']" :key="level"
-                    class="psettings-opt"
-                    :class="{ 'psettings-opt-active': projectEffort === level }"
-                    @click="projectEffort = level"
-                  >{{ level }}</span>
-                </div>
-              </div>
-              <div class="psettings-row">
-                <span class="psettings-label">Max turns</span>
-                <input
-                  type="number"
-                  class="psettings-input"
-                  v-model.number="projectMaxTurns"
-                  min="1"
-                  max="100"
-                  placeholder="unlimited"
-                />
-              </div>
-              <div class="psettings-row">
-                <span class="psettings-label">Context</span>
-                <button class="psettings-btn" @click="taskStore.resetSession(projectId)">Reset session</button>
-              </div>
-            </div>
-          </template>
+          <div v-else class="git-info git-info-empty">
+            <span class="git-empty">Git info unavailable</span>
+          </div>
         </div>
 
         <!-- Current task box -->
         <div class="current-task" :class="{ 'current-task-max': outputMaximized, 'current-task-running': runningTask }">
-          <div class="current-header">
-            <div class="current-status">
-              <template v-if="runningTask">
-                <span class="running-dot"></span>
-                <span class="running-label">Running</span>
-              </template>
-              <template v-else>
-                <span class="idle-label">Idle</span>
-              </template>
+          <!-- Task card area -->
+          <div class="current-card">
+            <div class="current-card-top">
+              <div class="current-status">
+                <template v-if="runningTask">
+                  <span class="running-dot"></span>
+                  <span class="running-label">Running</span>
+                </template>
+                <template v-else>
+                  <span class="idle-label">Idle</span>
+                </template>
+              </div>
+              <div class="current-card-actions">
+                <button v-if="runningTask" class="cancel-btn" @click="cancelTask" title="Cancel task">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  </svg>
+                  Cancel
+                </button>
+                <button class="expand-btn" @click="outputMaximized = !outputMaximized" :title="outputMaximized ? 'Collapse' : 'Expand'">
+                  <svg v-if="!outputMaximized" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M7.5 1H11V4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M4.5 11H1V7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <svg v-else width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M4.5 1V4.5H1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M7.5 11V7.5H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+              </div>
             </div>
-            <span v-if="runningTask" class="current-title">{{ runningTask.title }}</span>
-            <span v-else class="current-idle">No task running</span>
-            <button v-if="runningTask" class="cancel-btn" @click="cancelTask" title="Cancel task">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-              Cancel
-            </button>
-            <button class="expand-btn" @click="outputMaximized = !outputMaximized" :title="outputMaximized ? 'Collapse' : 'Expand'">
-              <svg v-if="!outputMaximized" width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M7.5 1H11V4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M4.5 11H1V7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-              <svg v-else width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M4.5 1V4.5H1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M7.5 11V7.5H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
+            <div v-if="runningTask" class="current-card-body">
+              <span class="current-title">{{ runningTask.title }}</span>
+              <p v-if="runningTask.description" class="current-desc">{{ runningTask.description }}</p>
+            </div>
+            <div v-else class="current-card-body">
+              <span class="current-idle">No task running</span>
+            </div>
           </div>
+          <!-- Output area -->
           <div ref="outputEl" class="current-output">
             <template v-if="runningTask">
               <div v-for="(line, i) in liveOutput" :key="i" class="output-line">{{ line }}</div>
@@ -380,166 +365,6 @@ function formatDate(date: string | null) {
   flex-shrink: 0;
 }
 
-/* Stats panel */
-.stats-panel {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.stats-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 0.6875rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-}
-
-.stats-cog {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
-}
-
-.stats-cog:hover {
-  color: var(--text-primary);
-  background: var(--hover-overlay);
-}
-
-/* Project settings */
-.psettings {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.psettings-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.psettings-label {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.psettings-toggle {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.psettings-opt {
-  padding: 2px 10px;
-  font-size: 0.6875rem;
-  font-weight: 500;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-right: 1px solid var(--border);
-  transition: color 0.15s ease, background 0.15s ease;
-}
-
-.psettings-opt:last-child {
-  border-right: none;
-}
-
-.psettings-opt:hover {
-  color: var(--text-secondary);
-}
-
-.psettings-opt-active {
-  color: var(--text-primary);
-  background: var(--bg-elevated);
-}
-
-.psettings-input {
-  width: 70px;
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-surface);
-  color: var(--text-primary);
-  font-family: inherit;
-  font-size: 0.75rem;
-  outline: none;
-}
-
-.psettings-input:focus {
-  border-color: var(--accent);
-}
-
-.psettings-btn {
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-muted);
-  font-family: inherit;
-  font-size: 0.6875rem;
-  font-weight: 500;
-  padding: 3px 10px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
-}
-
-.psettings-btn:hover {
-  color: var(--text-primary);
-  background: var(--hover-overlay);
-}
-
-.tiles {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 6px;
-}
-
-.tile {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 8px 4px;
-  background: var(--bg-elevated);
-  border-radius: var(--radius-xs);
-}
-
-.tile-accent {
-  background: var(--hover-overlay);
-}
-
-.tile-value {
-  font-size: 0.9375rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-}
-
-.tile-label {
-  font-size: 0.5625rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
 /* Current task box */
 .current-task {
   background: var(--bg-card);
@@ -549,12 +374,29 @@ function formatDate(date: string | null) {
   flex-direction: column;
 }
 
-.current-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.current-card {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
+}
+
+.current-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.current-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.current-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .current-status {
@@ -562,6 +404,16 @@ function formatDate(date: string | null) {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+
+.current-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .running-dot {
@@ -590,21 +442,19 @@ function formatDate(date: string | null) {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .current-title {
   font-size: 0.8125rem;
   font-weight: 500;
   color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.4;
 }
 
 .current-idle {
   font-size: 0.8125rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .current-task-running {
@@ -639,7 +489,7 @@ function formatDate(date: string | null) {
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   cursor: pointer;
   flex-shrink: 0;
   transition: color 0.15s ease, background 0.15s ease;
@@ -659,7 +509,7 @@ function formatDate(date: string | null) {
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-family: inherit;
   font-size: 0.6875rem;
   font-weight: 500;
@@ -685,7 +535,7 @@ function formatDate(date: string | null) {
 }
 
 .output-line {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -694,7 +544,7 @@ function formatDate(date: string | null) {
   display: inline-block;
   width: 5px;
   height: 10px;
-  background: var(--text-muted);
+  background: var(--text-secondary);
   animation: blink 1s step-end infinite;
 }
 
@@ -704,7 +554,7 @@ function formatDate(date: string | null) {
 }
 
 .output-empty {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-family: inherit;
   font-size: 0.6875rem;
 }
@@ -729,7 +579,7 @@ function formatDate(date: string | null) {
 
 .git-banner-text {
   font-size: 0.8125rem;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   flex: 1;
 }
 
@@ -768,7 +618,7 @@ function formatDate(date: string | null) {
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   cursor: pointer;
   transition: color 0.15s ease, background 0.15s ease;
 }
@@ -804,20 +654,20 @@ function formatDate(date: string | null) {
   padding: 4px 0;
   border: none;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-family: inherit;
   font-size: 0.75rem;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   transition: color 0.15s ease;
 }
-.history-toggle:hover { color: var(--text-secondary); }
+.history-toggle:hover { color: var(--text-primary); }
 .history-chevron { transition: transform 0.15s ease; }
 .history-chevron-open { transform: rotate(90deg); }
 .history-badge {
   font-size: 0.6875rem;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   background: var(--hover-overlay);
   padding: 0 6px;
   border-radius: 100px;
@@ -846,7 +696,7 @@ function formatDate(date: string | null) {
 .hi-name {
   flex: 1;
   font-size: 0.8125rem;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -855,7 +705,7 @@ function formatDate(date: string | null) {
 .hi-retry {
   border: none;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-family: inherit;
   font-size: 0.6875rem;
   font-weight: 500;
@@ -868,13 +718,122 @@ function formatDate(date: string | null) {
 .hi-retry:hover { color: var(--text-primary); background: var(--hover-overlay); }
 .hi-time {
   font-size: 0.6875rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   flex-shrink: 0;
   white-space: nowrap;
 }
 .history-empty {
   font-size: 0.8125rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   padding: 4px 8px;
+}
+
+/* Git info panel */
+.stats-panel {
+  min-width: 0;
+}
+
+.git-info {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.git-info-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.git-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.git-icon {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.git-branch {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-changes {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: #eab308;
+  background: rgba(234, 179, 8, 0.12);
+  padding: 1px 8px;
+  border-radius: 100px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.git-refresh-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-left: auto;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.git-refresh-btn:hover {
+  color: var(--text-primary);
+  background: var(--hover-overlay);
+}
+
+.git-commits {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.git-commit {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 14px;
+  font-size: 0.6875rem;
+  line-height: 1.6;
+}
+
+.git-hash {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.git-msg {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.git-empty {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  padding: 4px 14px;
 }
 </style>

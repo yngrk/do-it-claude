@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useTaskStore } from '../stores/taskStore'
+import { TASK_TAGS } from '../types'
+import type { TaskTag } from '../types'
 
 const props = defineProps<{ visible: boolean; projectId: string }>()
 const emit = defineEmits<{ close: [] }>()
@@ -8,15 +10,21 @@ const emit = defineEmits<{ close: [] }>()
 const taskStore = useTaskStore()
 const title = ref('')
 const description = ref('')
+const tag = ref<TaskTag | null>(null)
 const submitting = ref(false)
+
+function selectTag(value: TaskTag) {
+  tag.value = tag.value === value ? null : value
+}
 
 async function submit() {
   if (!title.value) return
   submitting.value = true
   try {
-    await taskStore.createTask(props.projectId, title.value, description.value)
+    await taskStore.createTask(props.projectId, title.value, description.value, tag.value)
     title.value = ''
     description.value = ''
+    tag.value = null
     emit('close')
   } finally {
     submitting.value = false
@@ -26,6 +34,7 @@ async function submit() {
 function close() {
   title.value = ''
   description.value = ''
+  tag.value = null
   emit('close')
 }
 </script>
@@ -45,6 +54,23 @@ function close() {
         <div class="form-group">
           <label>Title</label>
           <input v-model="title" type="text" placeholder="Task title" class="form-input" />
+        </div>
+        <div class="form-group">
+          <label>Tag</label>
+          <div class="tag-picker">
+            <button
+              v-for="t in TASK_TAGS"
+              :key="t.value"
+              class="tag-option"
+              :class="{ 'tag-selected': tag === t.value }"
+              :style="tag === t.value ? { background: t.color + '22', borderColor: t.color + '55', color: t.color } : {}"
+              @click="selectTag(t.value)"
+              type="button"
+            >
+              <span class="tag-dot" :style="{ background: t.color }"></span>
+              {{ t.label }}
+            </button>
+          </div>
         </div>
         <div class="form-group">
           <label>Description / Prompt</label>
@@ -67,3 +93,39 @@ function close() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.tag-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 100px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tag-option:hover {
+  border-color: var(--border-hover);
+  color: var(--text-secondary);
+}
+
+.tag-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+</style>
