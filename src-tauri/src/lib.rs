@@ -23,6 +23,7 @@ pub fn run() {
             app.manage(executor::new_running_processes());
             app.manage(executor::new_stop_flags());
             app.manage(executor::new_session_store());
+            app.manage(executor::new_active_queues());
             app.manage(pty::new_pty_sessions());
 
             Ok(())

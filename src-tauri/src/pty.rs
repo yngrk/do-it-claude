@@ -37,7 +37,22 @@ pub fn spawn_pty(
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let mut cmd = CommandBuilder::new(&shell);
+    cmd.arg("-l"); // Login shell: sources .zprofile/.zshrc so PATH includes Homebrew, npm, etc.
     cmd.cwd(&cwd);
+
+    // On macOS, Tauri apps inherit a minimal environment. Resolve the user's
+    // shell PATH so commands like `claude`, `node`, `cargo` are available.
+    if let Ok(output) = std::process::Command::new("/bin/zsh")
+        .args(["-ilc", "echo $PATH"])
+        .output()
+    {
+        if let Ok(shell_path) = String::from_utf8(output.stdout) {
+            let shell_path = shell_path.trim();
+            if !shell_path.is_empty() {
+                cmd.env("PATH", shell_path);
+            }
+        }
+    }
 
     pair.slave
         .spawn_command(cmd)

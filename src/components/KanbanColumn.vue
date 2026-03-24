@@ -9,11 +9,13 @@ const props = defineProps<{
   status: Task['status']
   tasks: Task[]
   allowDrag: boolean
+  deletable?: boolean
 }>()
 
 const emit = defineEmits<{
   'task-moved': [taskId: string, newStatus: Task['status'], newSortOrder: number]
   'open-detail': [task: Task]
+  'delete-task': [taskId: string]
 }>()
 
 const listEl = ref<HTMLElement | null>(null)
@@ -78,7 +80,9 @@ onBeforeUnmount(() => {
       >
         <TaskCard
           :task="task"
+          :deletable="deletable"
           @open-detail="emit('open-detail', task)"
+          @delete="emit('delete-task', task.id)"
         />
       </div>
       <div v-if="tasks.length === 0" class="empty-hint">

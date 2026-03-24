@@ -3,8 +3,13 @@ import { computed } from 'vue'
 import { TASK_TAGS } from '../types'
 import type { Task } from '../types'
 
-const props = defineProps<{ task: Task }>()
-const emit = defineEmits<{ 'open-detail': [] }>()
+const props = defineProps<{ task: Task, deletable?: boolean }>()
+const emit = defineEmits<{ 'open-detail': [], 'delete': [] }>()
+
+function onDelete(e: Event) {
+  e.stopPropagation()
+  emit('delete')
+}
 
 const tagInfo = computed(() => {
   if (!props.task.tag) return null
@@ -19,7 +24,12 @@ const tagInfo = computed(() => {
         {{ tagInfo.label }}
       </span>
       <p class="task-title">{{ task.title }}</p>
-      <svg class="chevron-icon" width="12" height="12" viewBox="0 0 12 12" fill="none">
+      <button v-if="deletable" class="delete-btn" @click="onDelete" title="Delete task">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <svg v-else class="chevron-icon" width="12" height="12" viewBox="0 0 12 12" fill="none">
         <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </div>
@@ -84,5 +94,31 @@ const tagInfo = computed(() => {
 .task-card:hover .chevron-icon {
   opacity: 1;
   transform: translateX(2px);
+}
+
+.delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.task-card:hover .delete-btn {
+  opacity: 0.6;
+}
+
+.delete-btn:hover {
+  opacity: 1 !important;
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
 }
 </style>

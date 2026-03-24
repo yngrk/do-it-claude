@@ -55,6 +55,22 @@ fn get_shell_path() -> Option<String> {
 pub type RunningProcesses = Arc<Mutex<HashMap<String, RunningTask>>>;
 pub type StopFlags = Arc<std::sync::Mutex<HashMap<String, bool>>>;
 pub type SessionStore = Arc<std::sync::Mutex<HashMap<String, String>>>; // project_id -> session_id
+pub type ActiveQueues = Arc<std::sync::Mutex<HashMap<String, bool>>>;
+
+pub fn new_active_queues() -> ActiveQueues {
+    Arc::new(std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Atomically check-and-set: returns true if the queue was newly marked active
+/// (caller should start the loop). Returns false if already active (caller should not).
+pub fn try_mark_active(active_queues: &ActiveQueues, project_id: &str) -> bool {
+    let mut active = active_queues.lock().unwrap();
+    if active.get(project_id) == Some(&true) {
+        return false;
+    }
+    active.insert(project_id.to_string(), true);
+    true
+}
 
 pub fn new_session_store() -> SessionStore {
     Arc::new(std::sync::Mutex::new(HashMap::new()))
@@ -106,6 +122,7 @@ pub async fn start_queue(
     processes: RunningProcesses,
     stop_flags: StopFlags,
     sessions: SessionStore,
+    active_queues: ActiveQueues,
     project_id: String,
 ) {
     // Clear stop flag on start
@@ -113,6 +130,8 @@ pub async fn start_queue(
         let mut flags = stop_flags.lock().unwrap();
         flags.remove(&project_id);
     }
+
+    // active flag was already set by try_mark_active in the command handler
 
     loop {
         // Check stop flag before picking up next task
@@ -362,6 +381,12 @@ pub async fn start_queue(
             exit_code,
             status: status.to_string(),
         });
+
+    }
+
+    {
+        let mut active = active_queues.lock().unwrap();
+        active.remove(&project_id);
     }
 
     let _ = app.emit("queue-stopped", QueueStoppedPayload {

@@ -62,8 +62,8 @@ export const useTaskStore = defineStore('task', () => {
     return task
   }
 
-  async function updateTask(taskId: string, updates: Partial<Task>) {
-    const task = await invoke<Task>('update_task', { taskId, ...updates })
+  async function updateTask(taskId: string, updates: { title?: string; description?: string; tag?: string | null }) {
+    const task = await invoke<Task>('update_task', { id: taskId, ...updates })
     const idx = tasks.value.findIndex(t => t.id === taskId)
     if (idx !== -1) {
       tasks.value[idx] = task

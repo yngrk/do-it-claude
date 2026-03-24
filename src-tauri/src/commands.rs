@@ -1,6 +1,6 @@
 use tauri::{AppHandle, State};
 use crate::db::{self, DbConn, Project, Task, TaskLog};
-use crate::executor::{self, RunningProcesses, StopFlags, SessionStore};
+use crate::executor::{self, RunningProcesses, StopFlags, SessionStore, ActiveQueues};
 use crate::pty::{self, PtySessions};
 
 #[tauri::command]
@@ -75,9 +75,10 @@ pub fn get_tasks(db: State<DbConn>, project_id: String) -> Result<Vec<Task>, Str
 }
 
 #[tauri::command]
-pub fn update_task(db: State<DbConn>, id: String, title: Option<String>, description: Option<String>) -> Result<Task, String> {
+pub fn update_task(db: State<DbConn>, id: String, title: Option<String>, description: Option<String>, tag: Option<Option<String>>) -> Result<Task, String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
-    db::update_task(&conn, &id, title.as_deref(), description.as_deref()).map_err(|e| e.to_string())
+    let tag_ref = tag.as_ref().map(|t| t.as_deref());
+    db::update_task(&conn, &id, title.as_deref(), description.as_deref(), tag_ref).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -105,15 +106,25 @@ pub async fn start_queue(
     processes: State<'_, RunningProcesses>,
     stop_flags: State<'_, StopFlags>,
     sessions: State<'_, SessionStore>,
+    active_queues: State<'_, ActiveQueues>,
     project_id: String,
 ) -> Result<(), String> {
     let db = db.inner().clone();
     let processes = processes.inner().clone();
-    let stop_flags = stop_flags.inner().clone();
+    let stop_flags_inner = stop_flags.inner().clone();
     let sessions = sessions.inner().clone();
+    let active_queues_inner = active_queues.inner().clone();
 
+    if !executor::try_mark_active(&active_queues_inner, &project_id) {
+        // Queue loop already running — just clear stop flag so it continues
+        let mut flags = stop_flags_inner.lock().unwrap();
+        flags.remove(&project_id);
+        return Ok(());
+    }
+
+    // active flag is now set; spawn the loop
     tokio::spawn(async move {
-        executor::start_queue(app, db, processes, stop_flags, sessions, project_id).await;
+        executor::start_queue(app, db, processes, stop_flags_inner, sessions, active_queues_inner, project_id).await;
     });
 
     Ok(())
@@ -296,3 +307,4 @@ pub fn get_git_info(path: String) -> Result<GitInfo, String> {
 
     Ok(GitInfo { branch, changes, commits })
 }
+

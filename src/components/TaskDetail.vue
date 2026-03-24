@@ -1,19 +1,62 @@
 <script setup lang="ts">
-import { watch, computed } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { useTaskStore } from '../stores/taskStore'
 import { TASK_TAGS } from '../types'
-import type { Task } from '../types'
+import type { Task, TaskTag } from '../types'
 
 const props = defineProps<{ task: Task | null }>()
 const emit = defineEmits<{ close: []; retry: [taskId: string] }>()
 
 const taskStore = useTaskStore()
 
+const editing = ref(false)
+const editTitle = ref('')
+const editDescription = ref('')
+const editTag = ref<TaskTag | null>(null)
+const saving = ref(false)
+
+const isBacklog = computed(() => props.task?.status === 'backlog')
+
 watch(() => props.task, (task) => {
+  editing.value = false
   if (task) {
     taskStore.loadTaskLogs(task.id)
+    editTitle.value = task.title
+    editDescription.value = task.description
+    editTag.value = (task.tag as TaskTag) || null
   }
 })
+
+function startEdit() {
+  if (!props.task) return
+  editTitle.value = props.task.title
+  editDescription.value = props.task.description
+  editTag.value = (props.task.tag as TaskTag) || null
+  editing.value = true
+}
+
+function cancelEdit() {
+  editing.value = false
+}
+
+function selectTag(value: TaskTag) {
+  editTag.value = editTag.value === value ? null : value
+}
+
+async function saveEdit() {
+  if (!props.task || !editTitle.value) return
+  saving.value = true
+  try {
+    await taskStore.updateTask(props.task.id, {
+      title: editTitle.value,
+      description: editDescription.value,
+      tag: editTag.value,
+    })
+    editing.value = false
+  } finally {
+    saving.value = false
+  }
+}
 
 const logs = computed(() => {
   if (!props.task) return []
@@ -48,61 +91,106 @@ function formatDate(date: string | null) {
         </button>
       </div>
       <div class="modal-body">
-        <h3>{{ task.title }}</h3>
-        <span v-if="tagInfo" class="detail-tag" :style="{ background: tagInfo.color + '18', color: tagInfo.color, borderColor: tagInfo.color + '33' }">
-          {{ tagInfo.label }}
-        </span>
-        <p class="task-description">{{ task.description }}</p>
+        <!-- Edit mode -->
+        <template v-if="editing">
+          <div class="form-group">
+            <label>Title</label>
+            <input v-model="editTitle" type="text" class="form-input" />
+          </div>
+          <div class="form-group">
+            <label>Tag</label>
+            <div class="tag-picker">
+              <button
+                v-for="t in TASK_TAGS"
+                :key="t.value"
+                class="tag-option"
+                :class="{ 'tag-selected': editTag === t.value }"
+                :style="editTag === t.value ? { background: t.color + '22', borderColor: t.color + '55', color: t.color } : {}"
+                @click="selectTag(t.value)"
+                type="button"
+              >
+                <span class="tag-dot" :style="{ background: t.color }"></span>
+                {{ t.label }}
+              </button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Description / Prompt</label>
+            <textarea
+              v-model="editDescription"
+              class="form-input form-textarea"
+              rows="5"
+            />
+          </div>
+        </template>
 
-        <div class="detail-meta">
-          <div class="meta-row">
-            <span class="detail-label meta-label">Status</span>
-            <span :class="`badge badge-${task.status}`">{{ task.status.replace('_', ' ') }}</span>
-          </div>
-          <div class="meta-row" v-if="task.exit_code !== null">
-            <span class="detail-label meta-label">Exit Code</span>
-            <span>{{ task.exit_code }}</span>
-          </div>
-          <div class="meta-row">
-            <span class="detail-label meta-label">Created</span>
-            <span>{{ formatDate(task.created_at) }}</span>
-          </div>
-          <div class="meta-row">
-            <span class="detail-label meta-label">Started</span>
-            <span>{{ formatDate(task.started_at) }}</span>
-          </div>
-          <div class="meta-row">
-            <span class="detail-label meta-label">Completed</span>
-            <span>{{ formatDate(task.completed_at) }}</span>
-          </div>
-        </div>
+        <!-- View mode -->
+        <template v-else>
+          <h3>{{ task.title }}</h3>
+          <span v-if="tagInfo" class="detail-tag" :style="{ background: tagInfo.color + '18', color: tagInfo.color, borderColor: tagInfo.color + '33' }">
+            {{ tagInfo.label }}
+          </span>
+          <p class="task-description">{{ task.description }}</p>
 
-        <div v-if="task.status === 'in_progress' && liveOutput.length > 0" class="log-section">
-          <h4 class="detail-label">Live Output</h4>
-          <div class="log-output log-output-mono">
-            <div v-for="(line, i) in liveOutput" :key="i" class="log-line log-live">{{ line }}</div>
-            <span class="live-cursor"></span>
+          <div class="detail-meta">
+            <div class="meta-row">
+              <span class="detail-label meta-label">Status</span>
+              <span :class="`badge badge-${task.status}`">{{ task.status.replace('_', ' ') }}</span>
+            </div>
+            <div class="meta-row" v-if="task.exit_code !== null">
+              <span class="detail-label meta-label">Exit Code</span>
+              <span>{{ task.exit_code }}</span>
+            </div>
+            <div class="meta-row">
+              <span class="detail-label meta-label">Created</span>
+              <span>{{ formatDate(task.created_at) }}</span>
+            </div>
+            <div class="meta-row">
+              <span class="detail-label meta-label">Started</span>
+              <span>{{ formatDate(task.started_at) }}</span>
+            </div>
+            <div class="meta-row">
+              <span class="detail-label meta-label">Completed</span>
+              <span>{{ formatDate(task.completed_at) }}</span>
+            </div>
           </div>
-        </div>
 
-        <div v-if="logs.length > 0" class="log-section">
-          <h4 class="detail-label">Logs</h4>
-          <div class="log-output log-output-mono">
-            <div
-              v-for="log in logs"
-              :key="log.id"
-              :class="`log-line log-${log.log_type}`"
-            >{{ log.content }}</div>
+          <div v-if="task.status === 'in_progress' && liveOutput.length > 0" class="log-section">
+            <h4 class="detail-label">Live Output</h4>
+            <div class="log-output log-output-mono">
+              <div v-for="(line, i) in liveOutput" :key="i" class="log-line log-live">{{ line }}</div>
+              <span class="live-cursor"></span>
+            </div>
           </div>
-        </div>
+
+          <div v-if="logs.length > 0" class="log-section">
+            <h4 class="detail-label">Logs</h4>
+            <div class="log-output log-output-mono">
+              <div
+                v-for="log in logs"
+                :key="log.id"
+                :class="`log-line log-${log.log_type}`"
+              >{{ log.content }}</div>
+            </div>
+          </div>
+        </template>
       </div>
       <div class="modal-footer">
-        <button
-          v-if="task.status === 'failed'"
-          class="btn btn-primary"
-          @click="emit('retry', task.id)"
-        >Retry</button>
-        <button class="btn btn-secondary" @click="emit('close')">Close</button>
+        <template v-if="editing">
+          <button class="btn btn-secondary" @click="cancelEdit">Cancel</button>
+          <button class="btn btn-primary" :disabled="!editTitle || saving" @click="saveEdit">
+            {{ saving ? 'Saving...' : 'Save' }}
+          </button>
+        </template>
+        <template v-else>
+          <button v-if="isBacklog" class="btn btn-primary" @click="startEdit">Edit</button>
+          <button
+            v-if="task.status === 'failed'"
+            class="btn btn-primary"
+            @click="emit('retry', task.id)"
+          >Retry</button>
+          <button class="btn btn-secondary" @click="emit('close')">Close</button>
+        </template>
       </div>
     </div>
   </div>
@@ -147,5 +235,39 @@ function formatDate(date: string | null) {
 @keyframes blink-cursor {
   0%, 100% { opacity: 0.7; }
   50% { opacity: 0; }
+}
+
+.tag-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 100px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tag-option:hover {
+  border-color: var(--border-hover);
+  color: var(--text-secondary);
+}
+
+.tag-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 </style>

@@ -162,12 +162,15 @@ pub fn get_tasks(conn: &Connection, project_id: &str) -> Result<Vec<Task>> {
     Ok(tasks)
 }
 
-pub fn update_task(conn: &Connection, id: &str, title: Option<&str>, description: Option<&str>) -> Result<Task> {
+pub fn update_task(conn: &Connection, id: &str, title: Option<&str>, description: Option<&str>, tag: Option<Option<&str>>) -> Result<Task> {
     if let Some(t) = title {
         conn.execute("UPDATE tasks SET title = ?1 WHERE id = ?2", params![t, id])?;
     }
     if let Some(d) = description {
         conn.execute("UPDATE tasks SET description = ?1 WHERE id = ?2", params![d, id])?;
+    }
+    if let Some(t) = tag {
+        conn.execute("UPDATE tasks SET tag = ?1 WHERE id = ?2", params![t, id])?;
     }
     let mut stmt = conn.prepare("SELECT id, project_id, title, description, tag, status, sort_order, exit_code, created_at, started_at, completed_at FROM tasks WHERE id = ?1")?;
     stmt.query_row(params![id], |row| {

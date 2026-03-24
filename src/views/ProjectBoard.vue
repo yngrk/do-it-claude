@@ -6,6 +6,7 @@ import { listen } from '@tauri-apps/api/event'
 import { useTaskStore } from '../stores/taskStore'
 import { useProjectStore } from '../stores/projectStore'
 import KanbanColumn from '../components/KanbanColumn.vue'
+import TaskCard from '../components/TaskCard.vue'
 import TaskDetail from '../components/TaskDetail.vue'
 import AddTaskDialog from '../components/AddTaskDialog.vue'
 import type { Task } from '../types'
@@ -23,6 +24,38 @@ const isGit = ref<boolean | null>(null)
 const initingGit = ref(false)
 const outputMaximized = ref(false)
 const gitInfo = ref<{ branch: string; changes: number; commits: { hash: string; message: string }[] } | null>(null)
+// Progress bar state
+const taskStartTime = ref<number | null>(null)
+const outputCount = ref(0)
+const progress = ref(0)
+let progressTimer: ReturnType<typeof setInterval> | null = null
+
+function startProgressTracking() {
+  taskStartTime.value = Date.now()
+  outputCount.value = 0
+  progress.value = 0
+  if (progressTimer) clearInterval(progressTimer)
+  progressTimer = setInterval(updateProgress, 500)
+}
+
+function stopProgressTracking(completed: boolean) {
+  if (completed) progress.value = 100
+  if (progressTimer) {
+    clearInterval(progressTimer)
+    progressTimer = null
+  }
+}
+
+function updateProgress() {
+  if (!taskStartTime.value) return
+  const elapsed = (Date.now() - taskStartTime.value) / 1000
+  // Asymptotic curve: approaches 90% over time, never reaches it
+  // Time component: logarithmic growth (fast initially, then slows)
+  const timePart = 90 * (1 - Math.exp(-elapsed / 120))
+  // Output activity bonus: each output line adds a tiny nudge (up to ~8%)
+  const outputPart = Math.min(8, outputCount.value * 0.15)
+  progress.value = Math.min(95, timePart + outputPart)
+}
 
 const activeProject = computed(() =>
   projectStore.projects.find(p => p.id === projectId.value) ?? null
@@ -50,6 +83,7 @@ function loadProject() {
   loadGitInfo()
   queueRunning.value = false
   outputMaximized.value = false
+  stopProgressTracking(false)
 }
 
 async function loadGitInfo() {
@@ -64,10 +98,15 @@ async function loadGitInfo() {
 onMounted(loadProject)
 
 const gitInterval = setInterval(() => {
-  if (activeProject.value) loadGitInfo()
+  if (activeProject.value) {
+    loadGitInfo()
+  }
 }, 30000)
 
-onUnmounted(() => clearInterval(gitInterval))
+onUnmounted(() => {
+  clearInterval(gitInterval)
+  if (progressTimer) clearInterval(progressTimer)
+})
 
 listen<{ project_id: string }>('queue-stopped', (event) => {
   if (event.payload.project_id === projectId.value) {
@@ -88,10 +127,10 @@ const runningTask = computed(() =>
   taskStore.tasks.find(t => t.status === 'in_progress') ?? null
 )
 const doneTasks = computed(() =>
-  taskStore.tasks.filter(t => t.status === 'done').sort((a, b) => a.sort_order - b.sort_order)
+  taskStore.tasks.filter(t => t.status === 'done').sort((a, b) => new Date(b.completed_at ?? 0).getTime() - new Date(a.completed_at ?? 0).getTime())
 )
 const failedTasks = computed(() =>
-  taskStore.tasks.filter(t => t.status === 'failed').sort((a, b) => a.sort_order - b.sort_order)
+  taskStore.tasks.filter(t => t.status === 'failed').sort((a, b) => new Date(b.completed_at ?? 0).getTime() - new Date(a.completed_at ?? 0).getTime())
 )
 const historyCount = computed(() => doneTasks.value.length + failedTasks.value.length)
 
@@ -108,13 +147,34 @@ watch(() => liveOutput.value.length, async () => {
   }
 })
 
+// Progress bar watchers (must be after runningTask/liveOutput computed declarations)
+watch(runningTask, (newVal, oldVal) => {
+  if (newVal && !oldVal) {
+    startProgressTracking()
+  } else if (!newVal && oldVal) {
+    stopProgressTracking(true)
+  }
+}, { immediate: true })
+
+watch(() => liveOutput.value.length, (newLen, oldLen) => {
+  if (newLen > oldLen) {
+    outputCount.value = newLen
+    updateProgress()
+  }
+})
+
 async function handleTaskMoved(taskId: string, newStatus: Task['status'], newSortOrder: number) {
   await taskStore.moveTask(taskId, newStatus, newSortOrder)
+}
+
+async function handleDeleteTask(taskId: string) {
+  await taskStore.deleteTask(taskId)
 }
 
 async function cancelTask() {
   if (!runningTask.value) return
   const taskId = runningTask.value.id
+  stopProgressTracking(false)
   await taskStore.cancelAndRevert(projectId.value)
   queueRunning.value = false
   await taskStore.moveTask(taskId, 'queued', 0)
@@ -137,6 +197,10 @@ function openDetail(task: Task) {
 
 async function retryTask(taskId: string) {
   await handleTaskMoved(taskId, 'queued', 0)
+}
+
+async function moveToBacklog(taskId: string) {
+  await handleTaskMoved(taskId, 'backlog', 0)
 }
 
 
@@ -169,76 +233,86 @@ function formatDate(date: string | null) {
       <!-- Top row: stats + running task -->
       <div class="top-row">
         <div class="stats-panel">
-          <div class="git-info" v-if="gitInfo">
-            <div class="git-header">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="git-icon">
-                <circle cx="4" cy="4" r="1.5" stroke="currentColor" stroke-width="1.2"/>
-                <circle cx="10" cy="4" r="1.5" stroke="currentColor" stroke-width="1.2"/>
-                <circle cx="4" cy="10" r="1.5" stroke="currentColor" stroke-width="1.2"/>
-                <path d="M4 5.5V8.5" stroke="currentColor" stroke-width="1.2"/>
-                <path d="M10 5.5V7C10 7.55 9.55 8 9 8H4" stroke="currentColor" stroke-width="1.2"/>
-              </svg>
-              <span class="git-branch">{{ gitInfo.branch }}</span>
-              <span v-if="gitInfo.changes > 0" class="git-changes">{{ gitInfo.changes }} change{{ gitInfo.changes === 1 ? '' : 's' }}</span>
-              <button class="git-refresh-btn" @click="loadGitInfo" title="Refresh">
-                <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-                  <path d="M1.5 6A4.5 4.5 0 0 1 9.2 3M10.5 6A4.5 4.5 0 0 1 2.8 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-                  <path d="M9.2 1V3H7.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                  <path d="M2.8 11V9H4.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          <!-- Left: Git info -->
+          <div class="stats-git">
+            <div class="git-info" v-if="gitInfo">
+              <div class="git-header">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="git-icon">
+                  <circle cx="4" cy="4" r="1.5" stroke="currentColor" stroke-width="1.2"/>
+                  <circle cx="10" cy="4" r="1.5" stroke="currentColor" stroke-width="1.2"/>
+                  <circle cx="4" cy="10" r="1.5" stroke="currentColor" stroke-width="1.2"/>
+                  <path d="M4 5.5V8.5" stroke="currentColor" stroke-width="1.2"/>
+                  <path d="M10 5.5V7C10 7.55 9.55 8 9 8H4" stroke="currentColor" stroke-width="1.2"/>
                 </svg>
-              </button>
-            </div>
-            <div class="git-commits">
-              <div v-if="gitInfo.commits.length === 0" class="git-empty">No commits yet.</div>
-              <div v-for="c in gitInfo.commits" :key="c.hash" class="git-commit">
-                <span class="git-hash">{{ c.hash }}</span>
-                <span class="git-msg">{{ c.message }}</span>
+                <span class="git-branch">{{ gitInfo.branch }}</span>
+                <span v-if="gitInfo.changes > 0" class="git-changes">{{ gitInfo.changes }} change{{ gitInfo.changes === 1 ? '' : 's' }}</span>
+                <button class="git-refresh-btn" @click="loadGitInfo" title="Refresh">
+                  <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                    <path d="M1.5 6A4.5 4.5 0 0 1 9.2 3M10.5 6A4.5 4.5 0 0 1 2.8 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                    <path d="M9.2 1V3H7.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M2.8 11V9H4.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="git-commits">
+                <div v-if="gitInfo.commits.length === 0" class="git-empty">No commits yet.</div>
+                <div v-for="c in gitInfo.commits" :key="c.hash" class="git-commit">
+                  <span class="git-hash">{{ c.hash }}</span>
+                  <span class="git-msg">{{ c.message }}</span>
+                </div>
               </div>
             </div>
-          </div>
-          <div v-else class="git-info git-info-empty">
-            <span class="git-empty">Git info unavailable</span>
+            <div v-else class="git-info git-info-empty">
+              <span class="git-empty">Git info unavailable</span>
+            </div>
           </div>
         </div>
 
         <!-- Current task box -->
         <div class="current-task" :class="{ 'current-task-max': outputMaximized, 'current-task-running': runningTask }">
-          <!-- Task card area -->
-          <div class="current-card">
-            <div class="current-card-top">
-              <div class="current-status">
-                <template v-if="runningTask">
-                  <span class="running-dot"></span>
-                  <span class="running-label">Running</span>
-                </template>
-                <template v-else>
-                  <span class="idle-label">Idle</span>
-                </template>
-              </div>
-              <div class="current-card-actions">
-                <button v-if="runningTask" class="cancel-btn" @click="cancelTask" title="Cancel task">
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                  </svg>
-                  Cancel
-                </button>
-                <button class="expand-btn" @click="outputMaximized = !outputMaximized" :title="outputMaximized ? 'Collapse' : 'Expand'">
-                  <svg v-if="!outputMaximized" width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path d="M7.5 1H11V4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M4.5 11H1V7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                  <svg v-else width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path d="M4.5 1V4.5H1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M7.5 11V7.5H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                </button>
-              </div>
+          <!-- Status bar -->
+          <div class="current-bar">
+            <div class="current-status">
+              <template v-if="runningTask">
+                <span class="running-dot"></span>
+                <span class="running-label">Running</span>
+              </template>
+              <template v-else>
+                <span class="idle-label">Idle</span>
+              </template>
             </div>
-            <div v-if="runningTask" class="current-card-body">
-              <span class="current-title">{{ runningTask.title }}</span>
-              <p v-if="runningTask.description" class="current-desc">{{ runningTask.description }}</p>
+            <div class="current-card-actions">
+              <button v-if="runningTask" class="cancel-btn" @click="cancelTask" title="Cancel task">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                Cancel
+              </button>
+              <button class="expand-btn" @click="outputMaximized = !outputMaximized" :title="outputMaximized ? 'Collapse' : 'Expand'">
+                <svg v-if="!outputMaximized" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M7.5 1H11V4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M4.5 11H1V7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <svg v-else width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M4.5 1V4.5H1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M7.5 11V7.5H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
             </div>
-            <div v-else class="current-card-body">
+          </div>
+          <!-- Progress bar -->
+          <div v-if="runningTask" class="progress-track">
+            <div class="progress-fill" :style="{ width: progress + '%' }"></div>
+          </div>
+          <!-- Card slot -->
+          <div class="current-card-slot">
+            <div v-if="runningTask" class="current-card-slot-inner">
+              <TaskCard
+                :task="runningTask"
+                @open-detail="openDetail(runningTask!)"
+              />
+            </div>
+            <div v-else class="current-card-slot-empty">
               <span class="current-idle">No task running</span>
             </div>
           </div>
@@ -260,8 +334,10 @@ function formatDate(date: string | null) {
           status="backlog"
           :tasks="backlogTasks"
           :allow-drag="true"
+          :deletable="true"
           @task-moved="handleTaskMoved"
           @open-detail="openDetail"
+          @delete-task="handleDeleteTask"
         >
           <template #actions>
             <button class="col-btn" @click="showAddDialog = true" title="Add task">
@@ -322,6 +398,7 @@ function formatDate(date: string | null) {
               <path d="M2.5 6L5 8.5L9.5 3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             <span class="hi-name">{{ task.title }}</span>
+            <button class="hi-retry" @click.stop="moveToBacklog(task.id)">To Backlog</button>
             <span class="hi-time">{{ formatDate(task.completed_at) }}</span>
           </div>
           <div
@@ -335,6 +412,7 @@ function formatDate(date: string | null) {
             </svg>
             <span class="hi-name">{{ task.title }}</span>
             <button class="hi-retry" @click.stop="retryTask(task.id)">Retry</button>
+            <button class="hi-retry" @click.stop="moveToBacklog(task.id)">To Backlog</button>
             <span class="hi-time">{{ formatDate(task.completed_at) }}</span>
           </div>
         </div>
@@ -374,23 +452,13 @@ function formatDate(date: string | null) {
   flex-direction: column;
 }
 
-.current-card {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-}
-
-.current-card-top {
+.current-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 6px;
-}
-
-.current-card-body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
 }
 
 .current-card-actions {
@@ -406,14 +474,38 @@ function formatDate(date: string | null) {
   flex-shrink: 0;
 }
 
-.current-desc {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+/* Progress bar */
+.progress-track {
+  height: 2px;
+  background: rgba(234, 179, 8, 0.1);
   overflow: hidden;
+  flex-shrink: 0;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, rgba(234, 179, 8, 0.6), #eab308);
+  transition: width 0.6s ease-out;
+  border-radius: 0 1px 1px 0;
+}
+
+.current-card-slot {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.current-card-slot-inner :deep(.task-card) {
+  margin: 0;
+  box-shadow: var(--shadow-card);
+}
+
+.current-card-slot-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 4px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
 }
 
 .running-dot {
@@ -443,13 +535,6 @@ function formatDate(date: string | null) {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-secondary);
-}
-
-.current-title {
-  font-size: 0.8125rem;
-  font-weight: 500;
-  color: var(--text-primary);
-  line-height: 1.4;
 }
 
 .current-idle {
@@ -731,6 +816,14 @@ function formatDate(date: string | null) {
 /* Git info panel */
 .stats-panel {
   min-width: 0;
+  display: flex;
+  gap: 14px;
+}
+
+.stats-git {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
 }
 
 .git-info {
