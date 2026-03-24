@@ -5,15 +5,13 @@ export interface Project {
   created_at: string
 }
 
-export type TaskTag = 'bug' | 'feature' | 'refactor' | 'test' | 'docs' | 'chore'
+export type TaskTag = string
 
-export const TASK_TAGS: { value: TaskTag; label: string; color: string }[] = [
+export const DEFAULT_TASK_TAGS: { value: string; label: string; color: string }[] = [
   { value: 'bug',      label: 'Bug',      color: '#f87171' },
   { value: 'feature',  label: 'Feature',  color: '#60a5fa' },
-  { value: 'refactor', label: 'Refactor', color: '#c084fc' },
-  { value: 'test',     label: 'Test',     color: '#4ade80' },
   { value: 'docs',     label: 'Docs',     color: '#facc15' },
-  { value: 'chore',    label: 'Chore',    color: '#94a3b8' },
+  { value: 'misc',     label: 'Misc',     color: '#94a3b8' },
 ]
 
 export interface Task {
@@ -21,7 +19,7 @@ export interface Task {
   project_id: string
   title: string
   description: string
-  tag: TaskTag | null
+  tag: string | null
   status: 'backlog' | 'queued' | 'in_progress' | 'done' | 'failed'
   sort_order: number
   exit_code: number | null
@@ -37,3 +35,4 @@ export interface TaskLog {
   log_type: 'stdout' | 'stderr'
   created_at: string
 }
+

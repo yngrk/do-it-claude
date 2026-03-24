@@ -73,7 +73,7 @@ export const useTaskStore = defineStore('task', () => {
   }
 
   async function deleteTask(taskId: string) {
-    await invoke('delete_task', { taskId })
+    await invoke('delete_task', { id: taskId })
     tasks.value = tasks.value.filter(t => t.id !== taskId)
   }
 

@@ -68,7 +68,9 @@ onBeforeUnmount(() => {
         <span class="column-title">{{ title }}</span>
         <span class="column-count">{{ tasks.length }}</span>
       </div>
-      <slot name="actions"></slot>
+      <div class="column-actions">
+        <slot name="actions"></slot>
+      </div>
     </div>
 
     <div ref="listEl" class="task-list" :data-status="status">
@@ -102,6 +104,12 @@ onBeforeUnmount(() => {
 
 .column-backlog .column-title { color: #999; }
 .column-queued .column-title { color: #3b82f6; }
+
+.column-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
 
 .empty-hint {
   text-align: center;

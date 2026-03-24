@@ -77,13 +77,15 @@ async function initGit() {
   }
 }
 
-function loadProject() {
-  taskStore.loadTasks(projectId.value)
-  checkGitStatus()
-  loadGitInfo()
+async function loadProject() {
   queueRunning.value = false
   outputMaximized.value = false
   stopProgressTracking(false)
+  checkGitStatus()
+  loadGitInfo()
+
+  await projectStore.loadProjects()
+  await taskStore.loadTasks(projectId.value)
 }
 
 async function loadGitInfo() {
@@ -203,11 +205,11 @@ async function moveToBacklog(taskId: string) {
   await handleTaskMoved(taskId, 'backlog', 0)
 }
 
-
 function formatDate(date: string | null) {
   if (!date) return ''
   return new Date(date).toLocaleString()
 }
+
 </script>
 
 <template>
@@ -246,13 +248,15 @@ function formatDate(date: string | null) {
                 </svg>
                 <span class="git-branch">{{ gitInfo.branch }}</span>
                 <span v-if="gitInfo.changes > 0" class="git-changes">{{ gitInfo.changes }} change{{ gitInfo.changes === 1 ? '' : 's' }}</span>
-                <button class="git-refresh-btn" @click="loadGitInfo" title="Refresh">
-                  <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-                    <path d="M1.5 6A4.5 4.5 0 0 1 9.2 3M10.5 6A4.5 4.5 0 0 1 2.8 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-                    <path d="M9.2 1V3H7.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M2.8 11V9H4.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                </button>
+                <div class="git-header-actions">
+                  <button class="git-header-btn" @click="loadGitInfo" title="Refresh">
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                      <path d="M1.5 6A4.5 4.5 0 0 1 9.2 3M10.5 6A4.5 4.5 0 0 1 2.8 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                      <path d="M9.2 1V3H7.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                      <path d="M2.8 11V9H4.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
+                </div>
               </div>
               <div class="git-commits">
                 <div v-if="gitInfo.commits.length === 0" class="git-empty">No commits yet.</div>
@@ -874,7 +878,15 @@ function formatDate(date: string | null) {
   flex-shrink: 0;
 }
 
-.git-refresh-btn {
+.git-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.git-header-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -886,11 +898,10 @@ function formatDate(date: string | null) {
   color: var(--text-secondary);
   cursor: pointer;
   flex-shrink: 0;
-  margin-left: auto;
   transition: color 0.15s ease, background 0.15s ease;
 }
 
-.git-refresh-btn:hover {
+.git-header-btn:hover {
   color: var(--text-primary);
   background: var(--hover-overlay);
 }
@@ -929,4 +940,6 @@ function formatDate(date: string | null) {
   color: var(--text-secondary);
   padding: 4px 14px;
 }
+
+
 </style>

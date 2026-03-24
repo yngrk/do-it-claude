@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { TASK_TAGS } from '../types'
+import { DEFAULT_TASK_TAGS } from '../types'
 import type { Task } from '../types'
 
 const props = defineProps<{ task: Task, deletable?: boolean }>()
@@ -13,7 +13,7 @@ function onDelete(e: Event) {
 
 const tagInfo = computed(() => {
   if (!props.task.tag) return null
-  return TASK_TAGS.find(t => t.value === props.task.tag) ?? null
+  return DEFAULT_TASK_TAGS.find(t => t.value === props.task.tag) ?? null
 })
 </script>
 
@@ -121,4 +121,5 @@ const tagInfo = computed(() => {
   background: rgba(239, 68, 68, 0.1);
   color: #ef4444;
 }
+
 </style>

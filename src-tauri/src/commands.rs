@@ -307,4 +307,3 @@ pub fn get_git_info(path: String) -> Result<GitInfo, String> {
 
     Ok(GitInfo { branch, changes, commits })
 }
-

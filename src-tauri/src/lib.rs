@@ -17,8 +17,8 @@ pub fn run() {
             std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
 
             let conn = db::init_db(&app_dir).expect("failed to initialize database");
-            let db_conn: db::DbConn = Arc::new(Mutex::new(conn));
 
+            let db_conn: db::DbConn = Arc::new(Mutex::new(conn));
             app.manage(db_conn);
             app.manage(executor::new_running_processes());
             app.manage(executor::new_stop_flags());
