@@ -43,7 +43,7 @@ pub fn resolve_claude_path() -> String {
 }
 
 /// Get the user's shell PATH for child processes
-fn get_shell_path() -> Option<String> {
+pub fn get_shell_path() -> Option<String> {
     std::process::Command::new("/bin/zsh")
         .args(["-ilc", "echo $PATH"])
         .output()
@@ -54,7 +54,7 @@ fn get_shell_path() -> Option<String> {
 
 pub type RunningProcesses = Arc<Mutex<HashMap<String, RunningTask>>>;
 pub type StopFlags = Arc<std::sync::Mutex<HashMap<String, bool>>>;
-pub type SessionStore = Arc<std::sync::Mutex<HashMap<String, String>>>; // project_id -> session_id
+pub type SessionStore = Arc<std::sync::Mutex<HashMap<String, String>>>; // task_id -> session_id
 pub type ActiveQueues = Arc<std::sync::Mutex<HashMap<String, bool>>>;
 
 pub fn new_active_queues() -> ActiveQueues {
@@ -103,6 +103,8 @@ struct TaskCompletedPayload {
     project_id: String,
     exit_code: i32,
     status: String,
+    task_title: String,
+    project_name: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -193,7 +195,7 @@ pub async fn start_queue(
         // Check for existing session to resume
         let existing_session = {
             let store = sessions.lock().unwrap();
-            store.get(&project_id).cloned()
+            store.get(&task.id).cloned()
         };
 
         let mut cmd = Command::new(&claude_bin);
@@ -244,6 +246,8 @@ pub async fn start_queue(
                     project_id: project_id.clone(),
                     exit_code: 1,
                     status: "failed".to_string(),
+                    task_title: task.title.clone(),
+                    project_name: project.name.clone(),
                 });
                 continue;
             }
@@ -268,7 +272,7 @@ pub async fn start_queue(
             let db_clone = db.clone();
             let task_id_clone = task_id.clone();
             let sessions_clone = sessions.clone();
-            let pid_clone = project_id.clone();
+            let task_key = task_id.clone();
             tokio::spawn(async move {
                 let reader = BufReader::new(stdout);
                 let mut lines = reader.lines();
@@ -282,7 +286,7 @@ pub async fn start_queue(
                                 // Capture session_id from init event
                                 if let Some(sid) = json.get("session_id").and_then(|v| v.as_str()) {
                                     let mut store = sessions_clone.lock().unwrap();
-                                    store.insert(pid_clone.clone(), sid.to_string());
+                                    store.insert(task_key.clone(), sid.to_string());
                                 }
                             }
                             "assistant" => {
@@ -370,6 +374,8 @@ pub async fn start_queue(
                     project_id: project_id.clone(),
                     exit_code: 130,
                     status: "failed".to_string(),
+                    task_title: task.title.clone(),
+                    project_name: project.name.clone(),
                 });
                 break;
             }
@@ -388,6 +394,8 @@ pub async fn start_queue(
             project_id: project_id.clone(),
             exit_code,
             status: status.to_string(),
+            task_title: task.title.clone(),
+            project_name: project.name.clone(),
         });
 
     }

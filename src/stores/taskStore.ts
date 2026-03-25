@@ -2,14 +2,18 @@ import { defineStore } from 'pinia'
 import { ref, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { Task, TaskLog, TaskTag } from '../types'
+import type { Task, TaskLog, TaskMessage, TaskTag } from '../types'
 
 export const useTaskStore = defineStore('task', () => {
   const tasks = ref<Task[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
   const taskLogs = reactive<Record<string, TaskLog[]>>({})
+  const taskMessages = reactive<Record<string, TaskMessage[]>>({})
   const liveLogs = ref<Record<string, string[]>>({})
+  const liveChatDrafts = ref<Record<string, string>>({})
+  const chatSending = ref<Record<string, boolean>>({})
+  const chatErrors = ref<Record<string, string | null>>({})
 
   listen<{ task_id: string }>('task-started', (event) => {
     const taskId = event.payload.task_id
@@ -41,6 +45,59 @@ export const useTaskStore = defineStore('task', () => {
     liveLogs.value = {
       ...liveLogs.value,
       [task_id]: [...existing, content],
+    }
+  })
+
+  listen<{ task_id: string }>('task-chat-started', (event) => {
+    const taskId = event.payload.task_id
+    liveChatDrafts.value = {
+      ...liveChatDrafts.value,
+      [taskId]: '',
+    }
+    chatSending.value = {
+      ...chatSending.value,
+      [taskId]: true,
+    }
+    chatErrors.value = {
+      ...chatErrors.value,
+      [taskId]: null,
+    }
+  })
+
+  listen<{ task_id: string; content: string }>('task-chat-chunk', (event) => {
+    const { task_id, content } = event.payload
+    liveChatDrafts.value = {
+      ...liveChatDrafts.value,
+      [task_id]: (liveChatDrafts.value[task_id] || '') + content,
+    }
+  })
+
+  listen<{ task_id: string; message: TaskMessage }>('task-chat-completed', (event) => {
+    const { task_id, message } = event.payload
+    taskMessages[task_id] = [...(taskMessages[task_id] || []), message]
+    liveChatDrafts.value = {
+      ...liveChatDrafts.value,
+      [task_id]: '',
+    }
+    chatSending.value = {
+      ...chatSending.value,
+      [task_id]: false,
+    }
+  })
+
+  listen<{ task_id: string; error: string }>('task-chat-failed', (event) => {
+    const { task_id, error } = event.payload
+    liveChatDrafts.value = {
+      ...liveChatDrafts.value,
+      [task_id]: '',
+    }
+    chatSending.value = {
+      ...chatSending.value,
+      [task_id]: false,
+    }
+    chatErrors.value = {
+      ...chatErrors.value,
+      [task_id]: error,
     }
   })
 
@@ -96,6 +153,47 @@ export const useTaskStore = defineStore('task', () => {
     return logs
   }
 
+  async function loadTaskMessages(taskId: string) {
+    const messages = await invoke<TaskMessage[]>('get_task_messages', { taskId })
+    taskMessages[taskId] = messages
+    return messages
+  }
+
+  async function sendTaskMessage(taskId: string, content: string) {
+    const trimmed = content.trim()
+    if (!trimmed) return
+
+    const optimisticMessage: TaskMessage = {
+      id: `local-${crypto.randomUUID()}`,
+      task_id: taskId,
+      role: 'user',
+      content: trimmed,
+      message_type: 'chat',
+      created_at: new Date().toISOString(),
+    }
+
+    taskMessages[taskId] = [...(taskMessages[taskId] || []), optimisticMessage]
+    chatErrors.value = {
+      ...chatErrors.value,
+      [taskId]: null,
+    }
+
+    try {
+      return await invoke<TaskMessage>('send_task_message', { taskId, content: trimmed })
+    } catch (e) {
+      taskMessages[taskId] = (taskMessages[taskId] || []).filter(message => message.id !== optimisticMessage.id)
+      chatSending.value = {
+        ...chatSending.value,
+        [taskId]: false,
+      }
+      chatErrors.value = {
+        ...chatErrors.value,
+        [taskId]: String(e),
+      }
+      throw e
+    }
+  }
+
   async function startQueue(projectId: string) {
     await invoke('start_queue', { projectId })
   }
@@ -121,13 +219,19 @@ export const useTaskStore = defineStore('task', () => {
     loading,
     error,
     taskLogs,
+    taskMessages,
     liveLogs,
+    liveChatDrafts,
+    chatSending,
+    chatErrors,
     loadTasks,
     createTask,
     updateTask,
     deleteTask,
     moveTask,
     loadTaskLogs,
+    loadTaskMessages,
+    sendTaskMessage,
     startQueue,
     stopQueue,
     pauseQueue,

@@ -39,6 +39,23 @@ export interface TaskLog {
   created_at: string
 }
 
+export interface TaskMessage {
+  id: string
+  task_id: string
+  role: 'user' | 'assistant'
+  content: string
+  message_type: 'chat'
+  created_at: string
+}
+
+export interface NotificationSettings {
+  enabled: boolean
+  notify_on_task_done: boolean
+  notify_on_task_failed: boolean
+  notify_on_chat_reply: boolean
+  suppress_when_focused: boolean
+}
+
 export interface PromptTemplate {
   id: string
   name: string
@@ -53,4 +70,3 @@ export interface ModeFile {
   file_path: string
   content: string
 }
-

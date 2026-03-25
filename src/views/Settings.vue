@@ -2,10 +2,14 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
+import { isPermissionGranted } from '@tauri-apps/plugin-notification'
 import { useTheme } from '../composables/useTheme'
+import { useNotificationSettings } from '../composables/useNotificationSettings'
+import { requestNotificationAccess, sendTestNotification } from '../services/notifications'
 
 const router = useRouter()
 const { theme, setTheme } = useTheme()
+const { settings, update } = useNotificationSettings()
 
 interface ClaudeStatus {
   found: boolean
@@ -16,6 +20,7 @@ interface ClaudeStatus {
 const claude = ref<ClaudeStatus | null>(null)
 const checking = ref(false)
 const templates = ref<string[]>([])
+const notificationPermission = ref<'granted' | 'denied' | 'default'>('default')
 
 async function checkClaude() {
   checking.value = true
@@ -36,9 +41,37 @@ async function openTemplatesFolder() {
   await invoke('open_templates_folder')
 }
 
+async function refreshNotificationPermission() {
+  notificationPermission.value = await isPermissionGranted() ? 'granted' : Notification.permission
+}
+
+async function setNotificationsEnabled(value: boolean) {
+  if (!value) {
+    update({ enabled: false })
+    return
+  }
+
+  const granted = await requestNotificationAccess()
+  notificationPermission.value = granted ? 'granted' : 'denied'
+  update({ enabled: granted })
+}
+
+async function testNotifications() {
+  await sendTestNotification(router)
+}
+
+function checkboxChecked(event: Event) {
+  return (event.target as HTMLInputElement).checked
+}
+
+function updateChecked<K extends keyof typeof settings.value>(key: K, checked: boolean) {
+  update({ [key]: checked })
+}
+
 onMounted(() => {
   checkClaude()
   loadTemplates()
+  refreshNotificationPermission()
 })
 
 function goBack() {
@@ -101,6 +134,76 @@ function goBack() {
             <span class="theme-option theme-option-unhinged" :class="{ 'theme-active': theme === 'unhinged' }" @click="setTheme('unhinged')">Unhinged</span>
           </div>
         </div>
+      </section>
+
+      <section class="glass-panel settings-section">
+        <h2 class="settings-section-title">Notifications</h2>
+
+        <div class="settings-row settings-row-top">
+          <span class="settings-label">Enable</span>
+          <div class="settings-inline">
+            <label class="settings-checkbox">
+              <input
+                type="checkbox"
+                :checked="settings.enabled"
+                @change="setNotificationsEnabled(checkboxChecked($event))"
+              />
+              <span>OS notifications</span>
+            </label>
+            <button class="refresh-btn" @click="testNotifications" :disabled="!settings.enabled">Test notification</button>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <span class="settings-label">Permission</span>
+          <div class="settings-inline">
+            <span class="text-muted">{{ notificationPermission }}</span>
+            <button class="recheck-btn" @click="refreshNotificationPermission">Refresh</button>
+          </div>
+        </div>
+
+        <div class="settings-option-list">
+          <label class="settings-checkbox">
+            <input
+              type="checkbox"
+              :checked="settings.notify_on_task_done"
+              :disabled="!settings.enabled"
+              @change="updateChecked('notify_on_task_done', checkboxChecked($event))"
+            />
+            <span>Notify on task completion</span>
+          </label>
+          <label class="settings-checkbox">
+            <input
+              type="checkbox"
+              :checked="settings.notify_on_task_failed"
+              :disabled="!settings.enabled"
+              @change="updateChecked('notify_on_task_failed', checkboxChecked($event))"
+            />
+            <span>Notify on task failure</span>
+          </label>
+          <label class="settings-checkbox">
+            <input
+              type="checkbox"
+              :checked="settings.notify_on_chat_reply"
+              :disabled="!settings.enabled"
+              @change="updateChecked('notify_on_chat_reply', checkboxChecked($event))"
+            />
+            <span>Notify on Claude chat replies</span>
+          </label>
+          <label class="settings-checkbox">
+            <input
+              type="checkbox"
+              :checked="settings.suppress_when_focused"
+              :disabled="!settings.enabled"
+              @change="updateChecked('suppress_when_focused', checkboxChecked($event))"
+            />
+            <span>Suppress while app is focused</span>
+          </label>
+        </div>
+
+        <p class="templates-desc settings-help">
+          Notifications open the relevant project and task when clicked. Task starts, queue stop events, and chat streaming chunks do not notify.
+        </p>
       </section>
 
       <section class="glass-panel settings-section">
@@ -207,10 +310,43 @@ function goBack() {
   margin-bottom: 0;
 }
 
+.settings-row-top {
+  align-items: flex-start;
+}
+
 .settings-label {
   font-size: 0.875rem;
   color: var(--text-secondary);
   min-width: 100px;
+}
+
+.settings-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.settings-checkbox input {
+  accent-color: var(--accent);
+}
+
+.settings-help {
+  margin-top: 12px;
 }
 
 .settings-app-name {

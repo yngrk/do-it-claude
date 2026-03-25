@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useTaskStore } from '../stores/taskStore'
@@ -13,15 +13,19 @@ import AddTaskDialog from '../components/AddTaskDialog.vue'
 import type { Task } from '../types'
 
 const route = useRoute()
+const router = useRouter()
 const taskStore = useTaskStore()
 const projectStore = useProjectStore()
 const projectId = computed(() => route.params.id as string)
+const routeTaskId = computed(() => typeof route.query.task === 'string' ? route.query.task : null)
+const routeFocus = computed<'details' | 'chat'>(() => route.query.focus === 'chat' ? 'chat' : 'details')
 const showAddDialog = ref(false)
 const showSettings = ref(false)
 const showTemplateModal = ref(false)
 const availableTemplates = ref<string[]>([])
 const loadedTemplateName = ref<string | null>(null)
 const selectedTask = ref<Task | null>(null)
+const selectedTaskFocus = ref<'details' | 'chat'>('details')
 const queueRunning = ref(false)
 const outputEl = ref<HTMLElement | null>(null)
 const isGit = ref<boolean | null>(null)
@@ -91,6 +95,7 @@ async function loadProject() {
   await projectStore.loadProjects()
   await taskStore.loadTasks(projectId.value)
   availableTemplates.value = await invoke<string[]>('list_templates')
+  syncTaskFromRoute()
 }
 
 async function loadGitInfo() {
@@ -210,8 +215,29 @@ async function toggleQueue() {
   }
 }
 
-function openDetail(task: Task) {
+function openDetail(task: Task, focus: 'details' | 'chat' = 'details') {
   selectedTask.value = task
+  selectedTaskFocus.value = focus
+}
+
+function syncTaskFromRoute() {
+  if (!routeTaskId.value) return
+  const task = taskStore.tasks.find(item => item.id === routeTaskId.value)
+  if (task) {
+    openDetail(task, routeFocus.value)
+  }
+}
+
+async function closeDetail() {
+  selectedTask.value = null
+  selectedTaskFocus.value = 'details'
+
+  if (!routeTaskId.value && !route.query.focus) return
+
+  const nextQuery = { ...route.query }
+  delete nextQuery.task
+  delete nextQuery.focus
+  await router.replace({ query: nextQuery })
 }
 
 async function retryTask(taskId: string) {
@@ -221,6 +247,24 @@ async function retryTask(taskId: string) {
 async function moveToBacklog(taskId: string) {
   await handleTaskMoved(taskId, 'backlog', 0)
 }
+
+watch(
+  () => [routeTaskId.value, routeFocus.value, taskStore.tasks.length],
+  () => {
+    syncTaskFromRoute()
+  },
+  { immediate: true },
+)
+
+watch(
+  () => taskStore.tasks,
+  (tasks) => {
+    if (!selectedTask.value) return
+    const updated = tasks.find(task => task.id === selectedTask.value?.id) ?? null
+    selectedTask.value = updated
+  },
+  { deep: true },
+)
 
 // Split resizer state
 const splitRatio = ref(0.4)
@@ -472,7 +516,7 @@ function onDividerMouseDown(e: MouseEvent) {
     </template>
 
     <!-- Modals -->
-    <TaskDetail :task="selectedTask" @close="selectedTask = null" @retry="retryTask($event)" @move-to-backlog="moveToBacklog($event)" />
+    <TaskDetail :task="selectedTask" :initial-focus="selectedTaskFocus" @close="closeDetail" @retry="retryTask($event)" @move-to-backlog="moveToBacklog($event)" />
     <AddTaskDialog :visible="showAddDialog" :project-id="projectId" @close="showAddDialog = false" />
     <ProjectSettingsModal :visible="showSettings" :project-id="projectId" @close="showSettings = false" />
 

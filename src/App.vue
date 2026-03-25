@@ -4,6 +4,7 @@ import { RouterView, useRouter, useRoute } from 'vue-router'
 import { useProjectStore } from './stores/projectStore'
 import AddProjectDialog from './components/AddProjectDialog.vue'
 import BottomPanel from './components/BottomPanel.vue'
+import { initNotificationService } from './services/notifications'
 
 const router = useRouter()
 const route = useRoute()
@@ -17,6 +18,7 @@ function toggleBottomTab(tab: 'logs' | 'terminal') {
 
 onMounted(() => {
   projectStore.loadProjects()
+  initNotificationService(router)
 })
 
 const activeProjectId = computed(() => {
@@ -137,4 +139,3 @@ async function handleProjectCreated() {
     />
   </div>
 </template>
-

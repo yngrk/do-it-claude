@@ -13,6 +13,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let app_dir = app.path().app_data_dir().expect("failed to get app data dir");
             std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
@@ -45,20 +46,25 @@ pub fn run() {
             commands::delete_task,
             commands::move_task,
             commands::get_task_logs,
+            commands::get_task_messages,
             commands::start_queue,
             commands::pause_queue,
             commands::stop_queue,
             commands::cancel_and_revert,
             commands::reset_session,
+            commands::send_task_message,
             commands::check_claude,
             commands::open_pty,
             commands::write_pty,
             commands::resize_pty,
             commands::close_pty,
             commands::get_git_info,
+            commands::list_presets,
             commands::list_templates,
+            commands::load_preset,
             commands::load_template,
             commands::restore_project_backup,
+            commands::open_presets_folder,
             commands::open_templates_folder,
             commands::update_project_system_prompt,
             commands::get_templates,

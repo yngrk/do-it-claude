@@ -175,6 +175,16 @@ pub struct TaskLog {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskMessage {
+    pub id: String,
+    pub task_id: String,
+    pub role: String,
+    pub content: String,
+    pub message_type: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptTemplate {
     pub id: String,
     pub name: String,
@@ -223,6 +233,15 @@ pub fn init_db(app_dir: &std::path::Path) -> Result<Connection> {
             task_id TEXT NOT NULL,
             content TEXT NOT NULL,
             log_type TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS task_messages (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            message_type TEXT NOT NULL,
             created_at TEXT NOT NULL,
             FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
         );
@@ -338,6 +357,7 @@ pub fn get_project_by_id(conn: &Connection, id: &str) -> Result<Option<Project>>
 }
 
 pub fn delete_project(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM task_messages WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?1)", params![id])?;
     conn.execute("DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?1)", params![id])?;
     conn.execute("DELETE FROM tasks WHERE project_id = ?1", params![id])?;
     conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
@@ -411,6 +431,33 @@ pub fn get_tasks(conn: &Connection, project_id: &str) -> Result<Vec<Task>> {
     Ok(tasks)
 }
 
+pub fn get_task_by_id(conn: &Connection, id: &str) -> Result<Option<Task>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, title, description, tag, status, sort_order, exit_code, created_at, started_at, completed_at, updated_at FROM tasks WHERE id = ?1"
+    )?;
+    let mut rows = stmt.query_map(params![id], |row| {
+        Ok(Task {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            title: row.get(2)?,
+            description: row.get(3)?,
+            tag: row.get(4)?,
+            status: row.get(5)?,
+            sort_order: row.get(6)?,
+            exit_code: row.get(7)?,
+            created_at: row.get(8)?,
+            started_at: row.get(9)?,
+            completed_at: row.get(10)?,
+            updated_at: row.get(11)?,
+        })
+    })?;
+    match rows.next() {
+        Some(Ok(task)) => Ok(Some(task)),
+        Some(Err(e)) => Err(e),
+        None => Ok(None),
+    }
+}
+
 pub fn update_task(conn: &Connection, id: &str, title: Option<&str>, description: Option<&str>, tag: Option<Option<&str>>) -> Result<Task> {
     if let Some(t) = title {
         conn.execute("UPDATE tasks SET title = ?1 WHERE id = ?2", params![t, id])?;
@@ -443,6 +490,7 @@ pub fn update_task(conn: &Connection, id: &str, title: Option<&str>, description
 }
 
 pub fn delete_task(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM task_messages WHERE task_id = ?1", params![id])?;
     conn.execute("DELETE FROM task_logs WHERE task_id = ?1", params![id])?;
     conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
     Ok(())
@@ -548,6 +596,39 @@ pub fn get_task_logs(conn: &Connection, task_id: &str) -> Result<Vec<TaskLog>> {
         })
     })?.collect::<Result<Vec<_>>>()?;
     Ok(logs)
+}
+
+pub fn add_task_message(conn: &Connection, task_id: &str, role: &str, content: &str, message_type: &str) -> Result<TaskMessage> {
+    let message = TaskMessage {
+        id: Uuid::new_v4().to_string(),
+        task_id: task_id.to_string(),
+        role: role.to_string(),
+        content: content.to_string(),
+        message_type: message_type.to_string(),
+        created_at: Utc::now().to_rfc3339(),
+    };
+    conn.execute(
+        "INSERT INTO task_messages (id, task_id, role, content, message_type, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![message.id, message.task_id, message.role, message.content, message.message_type, message.created_at],
+    )?;
+    Ok(message)
+}
+
+pub fn get_task_messages(conn: &Connection, task_id: &str) -> Result<Vec<TaskMessage>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, task_id, role, content, message_type, created_at FROM task_messages WHERE task_id = ?1 ORDER BY created_at ASC"
+    )?;
+    let messages = stmt.query_map(params![task_id], |row| {
+        Ok(TaskMessage {
+            id: row.get(0)?,
+            task_id: row.get(1)?,
+            role: row.get(2)?,
+            content: row.get(3)?,
+            message_type: row.get(4)?,
+            created_at: row.get(5)?,
+        })
+    })?.collect::<Result<Vec<_>>>()?;
+    Ok(messages)
 }
 
 pub fn get_templates(conn: &Connection) -> Result<Vec<PromptTemplate>> {

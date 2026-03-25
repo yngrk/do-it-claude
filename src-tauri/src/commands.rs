@@ -1,7 +1,8 @@
-use tauri::{AppHandle, Manager, State};
-use crate::db::{self, DbConn, Project, Task, TaskLog, PromptTemplate};
+use tauri::{AppHandle, Emitter, Manager, State};
+use crate::db::{self, DbConn, Project, Task, TaskLog, TaskMessage, PromptTemplate};
 use crate::executor::{self, RunningProcesses, StopFlags, SessionStore, ActiveQueues};
 use crate::pty::{self, PtySessions};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[tauri::command]
 pub fn create_project(db: State<DbConn>, name: String, path: String) -> Result<Project, String> {
@@ -100,6 +101,12 @@ pub fn get_task_logs(db: State<DbConn>, task_id: String) -> Result<Vec<TaskLog>,
 }
 
 #[tauri::command]
+pub fn get_task_messages(db: State<DbConn>, task_id: String) -> Result<Vec<TaskMessage>, String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    db::get_task_messages(&conn, &task_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn start_queue(
     app: AppHandle,
     db: State<'_, DbConn>,
@@ -132,11 +139,28 @@ pub async fn start_queue(
 
 #[tauri::command]
 pub fn reset_session(
+    db: State<DbConn>,
     sessions: State<SessionStore>,
-    project_id: String,
+    project_id: Option<String>,
+    task_id: Option<String>,
 ) -> Result<(), String> {
+    let task_ids = if let Some(task_id) = task_id {
+        vec![task_id]
+    } else if let Some(project_id) = project_id {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        db::get_tasks(&conn, &project_id)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|task| task.id)
+            .collect::<Vec<_>>()
+    } else {
+        return Err("Either project_id or task_id is required".to_string());
+    };
+
     let mut store = sessions.lock().map_err(|e| e.to_string())?;
-    store.remove(&project_id);
+    for task_id in task_ids {
+        store.remove(&task_id);
+    }
     Ok(())
 }
 
@@ -173,6 +197,218 @@ pub struct ClaudeStatus {
     found: bool,
     path: String,
     version: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct TaskChatStartedPayload {
+    task_id: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct TaskChatChunkPayload {
+    task_id: String,
+    content: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct TaskChatCompletedPayload {
+    task_id: String,
+    project_id: String,
+    project_name: String,
+    task_title: String,
+    message: TaskMessage,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct TaskChatFailedPayload {
+    task_id: String,
+    error: String,
+}
+
+fn extract_assistant_text(json: &serde_json::Value) -> Vec<String> {
+    let mut chunks = Vec::new();
+    if let Some(content) = json.pointer("/message/content").and_then(|v| v.as_array()) {
+        for item in content {
+            if item.get("type").and_then(|v| v.as_str()) == Some("text") {
+                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                    if !text.is_empty() {
+                        chunks.push(text.to_string());
+                    }
+                }
+            }
+        }
+    }
+    chunks
+}
+
+#[tauri::command]
+pub async fn send_task_message(
+    app: AppHandle,
+    db: State<'_, DbConn>,
+    sessions: State<'_, SessionStore>,
+    processes: State<'_, RunningProcesses>,
+    task_id: String,
+    content: String,
+) -> Result<TaskMessage, String> {
+    let content = content.trim().to_string();
+    if content.is_empty() {
+        return Err("Message cannot be empty".to_string());
+    }
+
+    let db_conn = db.inner().clone();
+    let (task, project) = {
+        let conn = db_conn.lock().map_err(|e| e.to_string())?;
+        let task = db::get_task_by_id(&conn, &task_id).map_err(|e| e.to_string())?
+            .ok_or_else(|| "Task not found".to_string())?;
+        let project = db::get_project_by_id(&conn, &task.project_id).map_err(|e| e.to_string())?
+            .ok_or_else(|| "Project not found".to_string())?;
+        (task, project)
+    };
+
+    if processes.inner().lock().await.contains_key(&project.id) {
+        return Err("Chat is unavailable while a task is actively running for this project".to_string());
+    }
+
+    let user_message = {
+        let conn = db_conn.lock().map_err(|e| e.to_string())?;
+        db::add_task_message(&conn, &task_id, "user", &content, "chat").map_err(|e| e.to_string())?
+    };
+
+    let _ = app.emit("task-chat-started", TaskChatStartedPayload {
+        task_id: task_id.clone(),
+    });
+
+    let existing_session = {
+        let session_id = sessions.inner().lock().map_err(|e| e.to_string())?.get(&task_id).cloned();
+        session_id
+    };
+
+    let claude_bin = executor::resolve_claude_path();
+    let shell_path = executor::get_shell_path();
+
+    let mut cmd = tokio::process::Command::new(&claude_bin);
+    cmd.arg("-p")
+        .arg(&content)
+        .arg("--dangerously-skip-permissions")
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--verbose");
+
+    if let Some(ref sid) = existing_session {
+        cmd.arg("--resume").arg(sid);
+    }
+
+    if let Some(ref prompt) = project.system_prompt {
+        if !prompt.trim().is_empty() {
+            cmd.arg("--append-system-prompt").arg(prompt);
+        }
+    }
+
+    cmd.current_dir(&project.path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    if let Some(ref path) = shell_path {
+        cmd.env("PATH", path);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let stdout = child.stdout.take().ok_or_else(|| "Failed to capture Claude stdout".to_string())?;
+    let stderr = child.stderr.take().ok_or_else(|| "Failed to capture Claude stderr".to_string())?;
+
+    let app_stdout = app.clone();
+    let sessions_stdout = sessions.inner().clone();
+    let task_id_stdout = task_id.clone();
+    let stdout_handle = tokio::spawn(async move {
+        let mut full_response = String::new();
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+                match json.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+                    "system" => {
+                        if let Some(sid) = json.get("session_id").and_then(|v| v.as_str()) {
+                            let mut store = sessions_stdout.lock().unwrap();
+                            store.insert(task_id_stdout.clone(), sid.to_string());
+                        }
+                    }
+                    "assistant" => {
+                        for chunk in extract_assistant_text(&json) {
+                            full_response.push_str(&chunk);
+                            let _ = app_stdout.emit("task-chat-chunk", TaskChatChunkPayload {
+                                task_id: task_id_stdout.clone(),
+                                content: chunk,
+                            });
+                        }
+                    }
+                    "result" => {
+                        if full_response.is_empty() {
+                            if let Some(result_text) = json.get("result").and_then(|v| v.as_str()) {
+                                full_response.push_str(result_text);
+                                let _ = app_stdout.emit("task-chat-chunk", TaskChatChunkPayload {
+                                    task_id: task_id_stdout.clone(),
+                                    content: result_text.to_string(),
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        full_response
+    });
+
+    let stderr_handle = tokio::spawn(async move {
+        let reader = BufReader::new(stderr);
+        let mut lines = reader.lines();
+        let mut output = Vec::new();
+        while let Ok(Some(line)) = lines.next_line().await {
+            output.push(line);
+        }
+        output
+    });
+
+    let status = child.wait().await.map_err(|e| e.to_string())?;
+    let assistant_content = stdout_handle.await.map_err(|e| e.to_string())?;
+    let stderr_output = stderr_handle.await.map_err(|e| e.to_string())?;
+
+    if !status.success() {
+        let error = stderr_output.join("\n").trim().to_string();
+        let error = if error.is_empty() { "Claude chat failed".to_string() } else { error };
+        let _ = app.emit("task-chat-failed", TaskChatFailedPayload {
+            task_id,
+            error: error.clone(),
+        });
+        return Err(error);
+    }
+
+    let final_content = assistant_content.trim().to_string();
+    if final_content.is_empty() {
+        let error = "Claude returned an empty response".to_string();
+        let _ = app.emit("task-chat-failed", TaskChatFailedPayload {
+            task_id,
+            error: error.clone(),
+        });
+        return Err(error);
+    }
+
+    let assistant_message = {
+        let conn = db_conn.lock().map_err(|e| e.to_string())?;
+        db::add_task_message(&conn, &user_message.task_id, "assistant", &final_content, "chat").map_err(|e| e.to_string())?
+    };
+
+    let _ = app.emit("task-chat-completed", TaskChatCompletedPayload {
+        task_id: user_message.task_id.clone(),
+        project_id: project.id.clone(),
+        project_name: project.name.clone(),
+        task_title: task.title.clone(),
+        message: assistant_message.clone(),
+    });
+
+    Ok(assistant_message)
 }
 
 #[tauri::command]
@@ -324,6 +560,12 @@ pub fn list_presets(app_handle: AppHandle) -> Result<Vec<String>, String> {
     crate::mode_manager::list_presets(&app_dir)
 }
 
+// Backward-compatible command aliases for the existing frontend wiring.
+#[tauri::command]
+pub fn list_templates(app_handle: AppHandle) -> Result<Vec<String>, String> {
+    list_presets(app_handle)
+}
+
 #[tauri::command]
 pub fn load_preset(app_handle: AppHandle, db: State<DbConn>, project_id: String, preset_name: String) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
@@ -332,6 +574,12 @@ pub fn load_preset(app_handle: AppHandle, db: State<DbConn>, project_id: String,
     let project_path = std::path::Path::new(&project.path);
     let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
     crate::mode_manager::load_preset(&app_dir, &project_id, project_path, &preset_name)
+}
+
+// Backward-compatible command aliases for the existing frontend wiring.
+#[tauri::command]
+pub fn load_template(app_handle: AppHandle, db: State<DbConn>, project_id: String, template_name: String) -> Result<(), String> {
+    load_preset(app_handle, db, project_id, template_name)
 }
 
 #[tauri::command]
@@ -350,6 +598,12 @@ pub fn open_presets_folder(app_handle: AppHandle) -> Result<(), String> {
     let dir = app_dir.join("presets");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     open_folder(&dir)
+}
+
+// Backward-compatible command aliases for the existing frontend wiring.
+#[tauri::command]
+pub fn open_templates_folder(app_handle: AppHandle) -> Result<(), String> {
+    open_presets_folder(app_handle)
 }
 
 #[tauri::command]

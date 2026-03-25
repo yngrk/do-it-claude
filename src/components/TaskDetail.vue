@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, nextTick } from 'vue'
 import { useTaskStore } from '../stores/taskStore'
 import { DEFAULT_TASK_TAGS } from '../types'
 import type { Task } from '../types'
 
-const props = defineProps<{ task: Task | null }>()
+const props = defineProps<{ task: Task | null; initialFocus?: 'details' | 'chat' }>()
 const emit = defineEmits<{ close: []; retry: [taskId: string]; 'move-to-backlog': [taskId: string] }>()
 
 const taskStore = useTaskStore()
@@ -14,6 +14,10 @@ const editDescription = ref('')
 const editTag = ref<string | null>(null)
 const saving = ref(false)
 const logsExpanded = ref(false)
+const chatInput = ref('')
+const includeExecutionInChat = ref(false)
+const transcriptEl = ref<HTMLElement | null>(null)
+const chatInputEl = ref<HTMLTextAreaElement | null>(null)
 
 const isEditable = computed(() => props.task?.status === 'backlog' || props.task?.status === 'queued')
 
@@ -21,11 +25,24 @@ watch(() => props.task, (task) => {
   logsExpanded.value = false
   if (task) {
     taskStore.loadTaskLogs(task.id)
+    taskStore.loadTaskMessages(task.id)
     editTitle.value = task.title
     editDescription.value = task.description
     editTag.value = task.tag || null
+    chatInput.value = ''
   }
 })
+
+watch(
+  () => [props.task?.id, props.initialFocus],
+  async ([taskId, initialFocus]) => {
+    if (!taskId || initialFocus !== 'chat') return
+    await nextTick()
+    chatInputEl.value?.focus()
+    transcriptEl.value?.scrollTo({ top: transcriptEl.value.scrollHeight })
+  },
+  { immediate: true },
+)
 
 function selectTag(value: string) {
   editTag.value = editTag.value === value ? null : value
@@ -60,6 +77,60 @@ const tagInfo = computed(() => {
   return DEFAULT_TASK_TAGS.find(t => t.value === props.task!.tag) ?? null
 })
 
+const messages = computed(() => {
+  if (!props.task) return []
+  return taskStore.taskMessages[props.task.id] || []
+})
+
+const chatDraft = computed(() => {
+  if (!props.task) return ''
+  return taskStore.liveChatDrafts[props.task.id] || ''
+})
+
+const isChatSending = computed(() => {
+  if (!props.task) return false
+  return taskStore.chatSending[props.task.id] || false
+})
+
+const chatError = computed(() => {
+  if (!props.task) return null
+  return taskStore.chatErrors[props.task.id] || null
+})
+
+const chatDisabledReason = computed(() => {
+  if (props.task?.status === 'in_progress') {
+    return 'Chat is unavailable while this task is actively running.'
+  }
+  return null
+})
+
+const transcriptEntries = computed(() => {
+  if (!props.task) return []
+
+  const chatEntries = messages.value.map(message => ({
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    kind: 'chat' as const,
+    created_at: message.created_at,
+  }))
+
+  if (!includeExecutionInChat.value) return chatEntries
+
+  const logEntries = logs.value.map(log => ({
+    id: `log-${log.id}`,
+    role: 'execution' as const,
+    content: log.content,
+    kind: 'execution' as const,
+    created_at: log.created_at,
+    tone: log.log_type,
+  }))
+
+  return [...chatEntries, ...logEntries].sort((a, b) =>
+    new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  )
+})
+
 function formatDate(date: string | null) {
   if (!date) return null
   const d = new Date(date)
@@ -89,6 +160,38 @@ const isDirty = computed(() => {
     || editDescription.value !== props.task.description
     || (editTag.value || null) !== (props.task.tag || null)
 })
+
+function formatTimestamp(date: string) {
+  const d = new Date(date)
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+async function sendChatMessage() {
+  if (!props.task || !chatInput.value.trim() || isChatSending.value || chatDisabledReason.value) return
+  const content = chatInput.value
+  chatInput.value = ''
+  try {
+    await taskStore.sendTaskMessage(props.task.id, content)
+  } catch {
+    chatInput.value = content
+  }
+}
+
+watch(
+  () => [
+    props.task?.id,
+    transcriptEntries.value.length,
+    chatDraft.value.length,
+    liveOutput.value.length,
+    includeExecutionInChat.value,
+  ],
+  async () => {
+    await nextTick()
+    if (transcriptEl.value) {
+      transcriptEl.value.scrollTop = transcriptEl.value.scrollHeight
+    }
+  },
+)
 </script>
 
 <template>
@@ -182,6 +285,87 @@ const isDirty = computed(() => {
           <div class="td-meta-item" v-if="formatDate(task.completed_at)">
             <span class="td-meta-label">Completed</span>
             <span class="td-meta-value">{{ formatDate(task.completed_at) }}</span>
+          </div>
+        </div>
+
+        <div class="td-section">
+          <div class="td-section-header">
+            <span class="td-section-label">Task Chat</span>
+            <label class="td-chat-toggle">
+              <input v-model="includeExecutionInChat" type="checkbox" />
+              Include execution events
+            </label>
+          </div>
+
+          <div ref="transcriptEl" class="td-chat-box">
+            <div v-if="transcriptEntries.length === 0 && !chatDraft" class="td-chat-empty">
+              No chat yet. Ask Claude about this task to start a thread.
+            </div>
+
+            <div
+              v-for="entry in transcriptEntries"
+              :key="entry.id"
+              class="td-chat-message"
+              :class="[
+                `td-chat-${entry.role}`,
+                entry.kind === 'execution' ? `td-chat-${entry.tone}` : '',
+              ]"
+            >
+              <div class="td-chat-meta">
+                <span class="td-chat-role">
+                  {{
+                    entry.role === 'user'
+                      ? 'You'
+                      : entry.role === 'assistant'
+                        ? 'Claude'
+                        : 'Execution'
+                  }}
+                </span>
+                <span class="td-chat-time">{{ formatTimestamp(entry.created_at) }}</span>
+              </div>
+              <div class="td-chat-content">{{ entry.content }}</div>
+            </div>
+
+            <div v-if="chatDraft" class="td-chat-message td-chat-assistant td-chat-draft">
+              <div class="td-chat-meta">
+                <span class="td-chat-role">Claude</span>
+                <span class="td-chat-time">typing</span>
+              </div>
+              <div class="td-chat-content">{{ chatDraft }}</div>
+            </div>
+
+            <div
+              v-if="includeExecutionInChat && task.status === 'in_progress' && liveOutput.length > 0"
+              class="td-chat-message td-chat-execution"
+            >
+              <div class="td-chat-meta">
+                <span class="td-chat-role">Execution</span>
+                <span class="td-chat-time">live</span>
+              </div>
+              <div class="td-chat-content">{{ liveOutput[liveOutput.length - 1] }}</div>
+            </div>
+          </div>
+
+          <div v-if="chatError" class="td-chat-error">{{ chatError }}</div>
+          <div v-if="chatDisabledReason" class="td-chat-note">{{ chatDisabledReason }}</div>
+
+          <div class="td-chat-composer">
+            <textarea
+              ref="chatInputEl"
+              v-model="chatInput"
+              class="td-chat-input"
+              rows="3"
+              placeholder="Ask Claude about this task..."
+              :disabled="!!chatDisabledReason || isChatSending"
+              @keydown.enter.exact.prevent="sendChatMessage"
+            />
+            <button
+              class="btn btn-primary btn-sm"
+              :disabled="!chatInput.trim() || !!chatDisabledReason || isChatSending"
+              @click="sendChatMessage"
+            >
+              {{ isChatSending ? 'Sending...' : 'Send' }}
+            </button>
           </div>
         </div>
 
@@ -457,6 +641,127 @@ const isDirty = computed(() => {
 
 .td-meta-ok  { color: var(--success); font-weight: 600; }
 .td-meta-err { color: var(--error); font-weight: 600; }
+
+.td-chat-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.td-chat-toggle input {
+  accent-color: var(--accent);
+}
+
+.td-chat-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+}
+
+.td-chat-empty,
+.td-chat-note {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.td-chat-message {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.td-chat-user {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.td-chat-assistant {
+  background: var(--bg-card);
+}
+
+.td-chat-execution {
+  background: var(--bg-terminal);
+}
+
+.td-chat-stderr {
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+.td-chat-draft {
+  border-style: dashed;
+}
+
+.td-chat-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.td-chat-role {
+  font-weight: 600;
+}
+
+.td-chat-content {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.td-chat-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.td-chat-input {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-xs);
+  padding: 12px 14px;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-family: inherit;
+  line-height: 1.6;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.td-chat-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.td-chat-input:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.td-chat-error {
+  font-size: 0.75rem;
+  color: var(--error);
+}
 
 /* Logs */
 .td-section-toggle {
