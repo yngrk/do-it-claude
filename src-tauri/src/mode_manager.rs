@@ -49,7 +49,7 @@ pub fn load_preset(app_dir: &Path, project_id: &str, project_path: &Path, preset
     }
 
     // Copy preset contents into project
-    copy_dir_contents(&src, project_path)?;
+    copy_dir_recursive(&src, project_path)?;
 
     Ok(())
 }
@@ -96,7 +96,7 @@ pub fn install_skill(app_dir: &Path, project_path: &Path, skill_name: &str) -> R
     }
     let dst = project_path.join(".claude").join("skills").join(skill_name);
     fs::create_dir_all(&dst).map_err(|e| e.to_string())?;
-    copy_dir_contents(&src, &dst)?;
+    copy_dir_recursive(&src, &dst)?;
     Ok(())
 }
 
@@ -110,40 +110,6 @@ pub fn install_agent(app_dir: &Path, project_path: &Path, agent_name: &str) -> R
     fs::create_dir_all(&dst_dir).map_err(|e| e.to_string())?;
     fs::copy(&src, dst_dir.join(format!("{}.md", agent_name))).map_err(|e| e.to_string())?;
     Ok(())
-}
-
-/// List installed skills in a project
-pub fn list_installed_skills(project_path: &Path) -> Result<Vec<String>, String> {
-    let dir = project_path.join(".claude").join("skills");
-    if !dir.exists() { return Ok(vec![]); }
-    let mut names = Vec::new();
-    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
-            if let Some(name) = entry.file_name().to_str() {
-                names.push(name.to_string());
-            }
-        }
-    }
-    names.sort();
-    Ok(names)
-}
-
-/// List installed agents in a project
-pub fn list_installed_agents(project_path: &Path) -> Result<Vec<String>, String> {
-    let dir = project_path.join(".claude").join("agents");
-    if !dir.exists() { return Ok(vec![]); }
-    let mut names = Vec::new();
-    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if let Some(name) = entry.file_name().to_str() {
-            if name.ends_with(".md") {
-                names.push(name.trim_end_matches(".md").to_string());
-            }
-        }
-    }
-    names.sort();
-    Ok(names)
 }
 
 /// Restore project config from backup (undo template load)
@@ -166,7 +132,7 @@ pub fn restore_backup(app_dir: &Path, project_id: &str, project_path: &Path) -> 
     }
 
     // Restore from backup
-    copy_dir_contents(&backup, project_path)?;
+    copy_dir_recursive(&backup, project_path)?;
 
     // Remove backup
     let _ = fs::remove_dir_all(&backup);
@@ -230,25 +196,6 @@ fn backup_project_config(app_dir: &Path, project_id: &str, project_path: &Path) 
             .map_err(|e| format!("Failed to backup .claude/: {}", e))?;
     }
 
-    Ok(())
-}
-
-/// Copy contents of src directory INTO dst (not src itself)
-fn copy_dir_contents(src: &Path, dst: &Path) -> Result<(), String> {
-    for entry in fs::read_dir(src).map_err(|e| format!("read_dir failed: {}", e))? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let ty = entry.file_type().map_err(|e| e.to_string())?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            if let Some(parent) = dst_path.parent() {
-                fs::create_dir_all(parent).map_err(|e| format!("mkdir failed: {}", e))?;
-            }
-            fs::copy(&src_path, &dst_path).map_err(|e| format!("copy failed: {}", e))?;
-        }
-    }
     Ok(())
 }
 

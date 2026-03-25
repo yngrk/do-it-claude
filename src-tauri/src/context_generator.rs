@@ -101,12 +101,11 @@ fn detect_stack(project_path: &Path) -> StackInfo {
                 ].iter().copied().collect();
 
                 for dep in &all_deps {
-                    if !dep.starts_with('@') || dep.starts_with("@tauri-apps") || dep.starts_with("@pinia") {
-                        if !skip_deps.contains(dep.as_str())
-                            && dep != "vue" && dep != "react" && dep != "svelte" && dep != "next"
-                        {
-                            info.js_deps.push(dep.clone());
-                        }
+                    if (!dep.starts_with('@') || dep.starts_with("@tauri-apps") || dep.starts_with("@pinia"))
+                        && !skip_deps.contains(dep.as_str())
+                        && dep != "vue" && dep != "react" && dep != "svelte" && dep != "next"
+                    {
+                        info.js_deps.push(dep.clone());
                     }
                 }
                 info.js_deps.dedup();
@@ -438,7 +437,7 @@ pub fn estimate_max_turns(description: &str, tag: Option<&str>) -> i32 {
     score += (action_count as f32).min(3.0) * 0.5;
 
     // Map score to turns (round to avoid truncation bias)
-    let turns = match score.round() as i32 {
+    match score.round() as i32 {
         i32::MIN..=0 => 3,
         1 => 5,
         2 => 8,
@@ -447,7 +446,5 @@ pub fn estimate_max_turns(description: &str, tag: Option<&str>) -> i32 {
         5 => 20,
         6 => 25,
         _ => 30,
-    };
-
-    turns
+    }
 }

@@ -11,6 +11,7 @@ import TaskCard from '../components/TaskCard.vue'
 import TaskDetail from '../components/TaskDetail.vue'
 import AddTaskDialog from '../components/AddTaskDialog.vue'
 import type { Task } from '../types'
+import { formatTimestamp } from '../utils/dateFormat'
 
 const route = useRoute()
 const router = useRouter()
@@ -278,12 +279,6 @@ const historyTasks = computed(() =>
     .sort((a, b) => new Date(b.completed_at ?? 0).getTime() - new Date(a.completed_at ?? 0).getTime())
 )
 
-function formatTime(dateStr: string | null) {
-  if (!dateStr) return ''
-  const d = new Date(dateStr)
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
 function onDividerMouseDown(e: MouseEvent) {
   e.preventDefault()
   isDragging.value = true
@@ -480,7 +475,7 @@ function onDividerMouseDown(e: MouseEvent) {
                     <button class="history-action-btn" @click.stop="retryTask(task.id)">Retry</button>
                     <button class="history-action-btn" @click.stop="moveToBacklog(task.id)">Backlog</button>
                   </div>
-                  <span class="history-row-time">{{ formatTime(task.completed_at) }}</span>
+                  <span class="history-row-time">{{ formatTimestamp(task.completed_at) }}</span>
                 </div>
               </div>
             </div>
@@ -591,7 +586,6 @@ function onDividerMouseDown(e: MouseEvent) {
 
 /* Execution monitor */
 .execution-monitor { flex: none; display: flex; flex-direction: column; background: transparent; overflow: hidden; min-height: 120px; }
-.monitor-running { }
 /* Pulse border applied to the split-container when running */
 .split-container:has(.monitor-running) { border-color: #a78bfa; animation: pulse-border 1.5s ease-in-out infinite; }
 @keyframes pulse-border {

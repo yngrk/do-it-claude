@@ -637,22 +637,6 @@ pub fn install_agent(app_handle: AppHandle, db: State<DbConn>, project_id: Strin
 }
 
 #[tauri::command]
-pub fn get_installed_skills(db: State<DbConn>, project_id: String) -> Result<Vec<String>, String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
-    let project = db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
-        .ok_or_else(|| "Project not found".to_string())?;
-    crate::mode_manager::list_installed_skills(std::path::Path::new(&project.path))
-}
-
-#[tauri::command]
-pub fn get_installed_agents(db: State<DbConn>, project_id: String) -> Result<Vec<String>, String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
-    let project = db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
-        .ok_or_else(|| "Project not found".to_string())?;
-    crate::mode_manager::list_installed_agents(std::path::Path::new(&project.path))
-}
-
-#[tauri::command]
 pub fn open_skills_folder(app_handle: AppHandle) -> Result<(), String> {
     let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
     let dir = app_dir.join("skills");

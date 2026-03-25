@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, computed, nextTick } from 'vue'
 import { useTaskStore } from '../stores/taskStore'
+import { formatDate, formatDuration, formatTimestamp } from '../utils/dateFormat'
 import { DEFAULT_TASK_TAGS } from '../types'
 import type { Task, TokenEstimate } from '../types'
 
@@ -144,26 +145,6 @@ const transcriptEntries = computed(() => {
   )
 })
 
-function formatDate(date: string | null) {
-  if (!date) return null
-  const d = new Date(date)
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' at ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-}
-
-function formatDuration(start: string | null, end: string | null) {
-  if (!start || !end) return null
-  const ms = new Date(end).getTime() - new Date(start).getTime()
-  if (ms < 1000) return '<1s'
-  const secs = Math.floor(ms / 1000)
-  if (secs < 60) return `${secs}s`
-  const mins = Math.floor(secs / 60)
-  const remainSecs = secs % 60
-  if (mins < 60) return `${mins}m ${remainSecs}s`
-  const hours = Math.floor(mins / 60)
-  const remainMins = mins % 60
-  return `${hours}h ${remainMins}m`
-}
-
 const duration = computed(() => formatDuration(props.task?.started_at ?? null, props.task?.completed_at ?? null))
 
 // Dirty check for save button
@@ -174,11 +155,6 @@ const isDirty = computed(() => {
     || (editTag.value || null) !== (props.task.tag || null)
     || editMaxTurns.value !== (props.task.max_turns ?? null)
 })
-
-function formatTimestamp(date: string) {
-  const d = new Date(date)
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
 
 async function sendChatMessage() {
   if (!props.task || !chatInput.value.trim() || isChatSending.value || chatDisabledReason.value) return
