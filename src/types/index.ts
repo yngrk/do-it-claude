@@ -2,16 +2,18 @@ export interface Project {
   id: string
   name: string
   path: string
+  system_prompt: string | null
+  mode_id: string | null
   created_at: string
 }
 
 export type TaskTag = string
 
 export const DEFAULT_TASK_TAGS: { value: string; label: string; color: string }[] = [
-  { value: 'bug',      label: 'Bug',      color: '#f87171' },
-  { value: 'feature',  label: 'Feature',  color: '#60a5fa' },
-  { value: 'docs',     label: 'Docs',     color: '#facc15' },
-  { value: 'misc',     label: 'Misc',     color: '#94a3b8' },
+  { value: 'bug',      label: 'Bug',      color: '#ef4444' },
+  { value: 'feature',  label: 'Feature',  color: '#8b5cf6' },
+  { value: 'docs',     label: 'Docs',     color: '#f59e0b' },
+  { value: 'misc',     label: 'Misc',     color: '#6366f1' },
 ]
 
 export interface Task {
@@ -26,6 +28,7 @@ export interface Task {
   created_at: string
   started_at: string | null
   completed_at: string | null
+  updated_at: string | null
 }
 
 export interface TaskLog {
@@ -34,5 +37,20 @@ export interface TaskLog {
   content: string
   log_type: 'stdout' | 'stderr'
   created_at: string
+}
+
+export interface PromptTemplate {
+  id: string
+  name: string
+  content: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ModeFile {
+  id: string
+  mode_id: string
+  file_path: string
+  content: string
 }
 

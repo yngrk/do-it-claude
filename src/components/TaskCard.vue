@@ -20,7 +20,7 @@ const tagInfo = computed(() => {
 <template>
   <div class="task-card" @click="emit('open-detail')">
     <div class="task-card-top">
-      <span v-if="tagInfo" class="task-tag" :style="{ background: tagInfo.color + '18', color: tagInfo.color, borderColor: tagInfo.color + '33' }">
+      <span v-if="tagInfo" class="task-tag" :style="{ background: tagInfo.color + '28', color: tagInfo.color, borderColor: tagInfo.color + '55' }">
         {{ tagInfo.label }}
       </span>
       <p class="task-title">{{ task.title }}</p>
@@ -65,12 +65,13 @@ const tagInfo = computed(() => {
 .task-tag {
   display: inline-flex;
   flex-shrink: 0;
-  padding: 1px 8px;
+  padding: 2px 9px;
   border-radius: 100px;
   font-size: 0.6875rem;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.02em;
   border: 1px solid;
+  text-shadow: 0 0 10px currentColor;
 }
 
 .task-prompt {

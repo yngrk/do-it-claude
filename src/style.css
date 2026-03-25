@@ -4,40 +4,44 @@
 
 /* --- CSS Variables ----------------------------------------- */
 :root {
-  /* Colors — dark with clear layer separation */
-  --bg-base:      #09090b;
-  --bg-surface:   #16161a;
-  --bg-terminal:  #0e0e10;
-  --bg-card:      #1f1f24;
-  --bg-elevated:  #2c2c33;
-  --bg-hover:     #38383f;
+  /* Colors — dark with strong layer separation */
+  --bg-base:      #050507;
+  --bg-surface:   #111114;
+  --bg-terminal:  #08080a;
+  --bg-card:      #1a1a20;
+  --bg-elevated:  #26262e;
+  --bg-hover:     #32323c;
 
-  --accent:        #ffffff;
-  --accent-glow:   rgba(255, 255, 255, 0.18);
+  --accent:        #a855f7;
+  --accent-glow:   rgba(168, 85, 247, 0.4);
+
+  --accent-secondary: #3b82f6;
+  --accent-tertiary: #10b981;
 
   --success:  #22c55e;
-  --warning:  #eab308;
-  --error:    #f87171;
-  --danger:   #f87171;
+  --warning:  #f59e0b;
+  --error:    #fb7185;
+  --danger:   #fb7185;
 
-  --text-primary:   #f5f5f5;
-  --text-secondary: #a1a1aa;
-  --text-muted:     #63636e;
+  --text-primary:   #fafafa;
+  --text-secondary: #a8a8b3;
+  --text-muted:     #55555f;
 
-  --border:       rgba(255, 255, 255, 0.12);
-  --border-hover: rgba(255, 255, 255, 0.25);
-  --hover-overlay: rgba(255, 255, 255, 0.07);
+  /* Stronger borders */
+  --border:       rgba(255, 255, 255, 0.1);
+  --border-hover: rgba(255, 255, 255, 0.28);
+  --hover-overlay: rgba(255, 255, 255, 0.06);
 
-  /* Badge colors — 4 status colors + neutral */
-  --badge-backlog-bg:      rgba(255, 255, 255, 0.06);
-  --badge-backlog-color:   #a1a1aa;
-  --badge-queued-bg:       rgba(59, 130, 246, 0.15);
+  /* Bolder badge colors */
+  --badge-backlog-bg:      rgba(168, 85, 247, 0.16);
+  --badge-backlog-color:   #c084fc;
+  --badge-queued-bg:       rgba(59, 130, 246, 0.2);
   --badge-queued-color:    #60a5fa;
-  --badge-in_progress-bg:  rgba(234, 179, 8, 0.15);
-  --badge-in_progress-color: #facc15;
-  --badge-done-bg:         rgba(34, 197, 94, 0.15);
-  --badge-done-color:      #4ade80;
-  --badge-failed-bg:       rgba(239, 68, 68, 0.15);
+  --badge-in_progress-bg:  rgba(168, 85, 247, 0.25);
+  --badge-in_progress-color: #c084fc;
+  --badge-done-bg:         rgba(16, 185, 129, 0.2);
+  --badge-done-color:      #34d399;
+  --badge-failed-bg:       rgba(251, 113, 133, 0.2);
   --badge-failed-color:    #fb7185;
 
   /* Radius */
@@ -49,13 +53,13 @@
   --radius-sm:     4px;
   --radius-xs:     4px;
 
-  /* Shadows — crisp black */
-  --shadow-card:       0 2px 12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
-  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.1);
-  --shadow-modal:      0 24px 64px rgba(0, 0, 0, 0.85), 0 0 0 1px var(--border);
+  /* Heavier shadows with accent tint */
+  --shadow-card:       0 2px 8px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(168, 85, 247, 0.1);
+  --shadow-card-hover: 0 8px 28px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(168, 85, 247, 0.3), 0 0 24px rgba(168, 85, 247, 0.1);
+  --shadow-modal:      0 24px 64px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(168, 85, 247, 0.15);
 
-  /* No gradient — flat accent */
-  --gradient-accent: #ffffff;
+  /* Gradient */
+  --gradient-accent: linear-gradient(135deg, #a855f7, #6366f1, #3b82f6);
 
   /* Glass */
   --glass-bg:     rgba(255, 255, 255, 0.03);
@@ -76,49 +80,55 @@
 
 /* --- Light Theme ------------------------------------------- */
 :root[data-theme="light"] {
-  --bg-base:      #f0f0f2;
-  --bg-surface:   #f8f8fa;
+  /* Stronger layer separation: cool gray base → warm white cards */
+  --bg-base:      #e5e7eb;
+  --bg-surface:   #eef0f4;
   --bg-card:      #ffffff;
-  --bg-elevated:  #e8e8ec;
-  --bg-hover:     #dcdce2;
+  --bg-elevated:  #d4d6dc;
+  --bg-hover:     #c8cad2;
 
-  --accent:        #111111;
-  --accent-glow:   rgba(0, 0, 0, 0.1);
+  --accent:        #7c3aed;
+  --accent-glow:   rgba(124, 58, 237, 0.2);
+  --accent-secondary: #2563eb;
+  --accent-tertiary: #059669;
 
   --success:  #16a34a;
-  --warning:  #ca8a04;
+  --warning:  #d97706;
   --error:    #dc2626;
   --danger:   #dc2626;
 
-  --text-primary:   #0c0c0e;
-  --text-secondary: #4a4a55;
-  --text-muted:     #8a8a96;
+  --text-primary:   #09090b;
+  --text-secondary: #3f3f46;
+  --text-muted:     #71717a;
 
-  --border:       rgba(0, 0, 0, 0.12);
-  --border-hover: rgba(0, 0, 0, 0.22);
-  --hover-overlay: rgba(0, 0, 0, 0.05);
+  /* Stronger borders */
+  --border:       rgba(0, 0, 0, 0.15);
+  --border-hover: rgba(0, 0, 0, 0.28);
+  --hover-overlay: rgba(0, 0, 0, 0.06);
 
-  --badge-backlog-bg:      rgba(0, 0, 0, 0.06);
-  --badge-backlog-color:   #5a5a66;
-  --badge-queued-bg:       rgba(37, 99, 235, 0.1);
-  --badge-queued-color:    #2563eb;
-  --badge-in_progress-bg:  rgba(202, 138, 4, 0.1);
-  --badge-in_progress-color: #ca8a04;
-  --badge-done-bg:         rgba(22, 163, 74, 0.1);
-  --badge-done-color:      #16a34a;
-  --badge-failed-bg:       rgba(220, 38, 38, 0.1);
-  --badge-failed-color:    #dc2626;
+  /* Bolder badge colors */
+  --badge-backlog-bg:      rgba(124, 58, 237, 0.1);
+  --badge-backlog-color:   #7c3aed;
+  --badge-queued-bg:       rgba(37, 99, 235, 0.15);
+  --badge-queued-color:    #1d4ed8;
+  --badge-in_progress-bg:  rgba(124, 58, 237, 0.15);
+  --badge-in_progress-color: #6d28d9;
+  --badge-done-bg:         rgba(5, 150, 105, 0.15);
+  --badge-done-color:      #047857;
+  --badge-failed-bg:       rgba(220, 38, 38, 0.15);
+  --badge-failed-color:    #b91c1c;
 
-  --shadow-card:       0 1px 4px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0,0,0,0.04);
-  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0,0,0,0.06);
-  --shadow-modal:      0 24px 64px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0,0,0,0.06);
+  /* Heavier shadows for depth */
+  --shadow-card:       0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0,0,0,0.05);
+  --shadow-card-hover: 0 8px 20px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(124, 58, 237, 0.15);
+  --shadow-modal:      0 24px 64px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(0,0,0,0.08);
 
-  --gradient-accent: #111111;
+  --gradient-accent: linear-gradient(135deg, #7c3aed, #4f46e5, #2563eb);
 
-  --bg-terminal:  #ececf0;
+  --bg-terminal:  #e2e4e8;
 
-  --glass-bg:     rgba(255, 255, 255, 0.8);
-  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-bg:     rgba(255, 255, 255, 0.85);
+  --glass-border: rgba(0, 0, 0, 0.1);
 }
 
 /* --- Reset -------------------------------------------------- */
@@ -183,7 +193,10 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 
 /* --- Utility Classes --------------------------------------- */
 .gradient-text {
-  color: var(--text-primary);
+  background: var(--gradient-accent);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .glass-panel {
@@ -361,20 +374,20 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 
 .tab-active {
   color: var(--text-primary);
-  background: var(--bg-card);
-  border-color: var(--border-hover);
-  box-shadow: 0 1px 6px rgba(0,0,0,0.1);
+  background: rgba(168, 85, 247, 0.1);
+  border-color: rgba(168, 85, 247, 0.4);
+  box-shadow: 0 1px 8px rgba(168, 85, 247, 0.2), inset 0 0 12px rgba(168, 85, 247, 0.05);
 }
 
 .tab-active::after {
   content: '';
   position: absolute;
   bottom: -1px;
-  left: 8px;
-  right: 8px;
+  left: 6px;
+  right: 6px;
   height: 2px;
   border-radius: 2px;
-  background: var(--accent);
+  background: linear-gradient(90deg, #a855f7, #6366f1);
 }
 
 .tab-label {
@@ -436,7 +449,7 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 
 .btn-primary {
   background: var(--accent);
-  color: var(--bg-base);
+  color: #ffffff;
   border-color: transparent;
   font-weight: 600;
 }
@@ -546,25 +559,6 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
   border-color: rgba(248, 113, 113, 0.12);
 }
 
-/* --- Dashboard --------------------------------------------- */
-.dashboard {
-  max-width: 1200px;
-  margin: 0 auto;
-}
-
-.dashboard-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 32px;
-}
-
-.projects-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-  gap: 16px;
-}
-
 /* --- Project Card ------------------------------------------ */
 .project-card {
   background-color: var(--bg-card);
@@ -591,108 +585,11 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
   margin-bottom: 8px;
 }
 
-.project-card-name {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: -0.01em;
-}
-
-.project-card-delete {
-  opacity: 0;
-  transition: var(--transition);
-  flex-shrink: 0;
-}
-
-.project-card:hover .project-card-delete {
-  opacity: 1;
-}
-
-.project-card-path {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  margin-bottom: 14px;
-  word-break: break-all;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-}
-
-.project-card-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.stat {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--text-muted);
-  background: var(--hover-overlay);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  padding: 2px 10px;
-}
-
-/* Add Project Card */
-.add-project-card {
-  background-color: transparent;
-  border: 2px dashed var(--hover-overlay);
-  border-radius: var(--radius-card);
-  padding: 20px;
-  cursor: pointer;
-  transition: var(--transition);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: var(--text-muted);
-  font-size: 0.875rem;
-  font-weight: 500;
-  min-height: 120px;
-}
-
-.add-project-card:hover {
-  border-color: var(--border-hover);
-  background-color: var(--hover-overlay);
-  color: var(--accent);
-  transform: translateY(-2px);
-}
-
 /* --- Kanban Board ------------------------------------------ */
 .project-board {
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-height: 0;
-}
-
-.board-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 24px;
-  flex-shrink: 0;
-}
-
-.board-title {
-  font-size: 1.25rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--text-primary);
-}
-
-.board-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.board-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
   min-height: 0;
 }
 
@@ -709,7 +606,8 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 }
 
 .kanban-column:hover {
-  border-color: var(--border-hover);
+  border-color: rgba(168, 85, 247, 0.35);
+  box-shadow: 0 0 16px rgba(168, 85, 247, 0.06);
 }
 
 
@@ -771,9 +669,9 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 }
 
 .task-card:hover {
-  border-color: var(--border-hover);
+  border-color: rgba(168, 85, 247, 0.4);
   box-shadow: var(--shadow-card-hover);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
 }
 
 .task-card-header {
@@ -795,80 +693,6 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-/* --- Task Detail ------------------------------------------- */
-.task-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.detail-section {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.detail-label {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-secondary);
-}
-
-.detail-value {
-  font-size: 0.875rem;
-  color: var(--text-secondary);
-  line-height: 1.6;
-  white-space: pre-wrap;
-}
-
-.log-output {
-  background-color: var(--bg-terminal);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 14px;
-  max-height: 280px;
-  overflow-y: auto;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
-  font-size: 0.75rem;
-  line-height: 1.7;
-}
-
-.log-entry {
-  display: block;
-  word-break: break-all;
-}
-
-.log-stdout {
-  color: var(--text-primary);
-}
-
-.log-stderr {
-  color: #f87171;
-}
-
-.live-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 0.6875rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--success);
-}
-
-.live-indicator::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--success);
-  animation: pulse-glow 1.6s ease infinite;
-  flex-shrink: 0;
 }
 
 /* --- Modal ------------------------------------------------- */

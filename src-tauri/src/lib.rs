@@ -2,6 +2,7 @@ mod db;
 mod commands;
 mod executor;
 mod pty;
+mod mode_manager;
 
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -17,6 +18,9 @@ pub fn run() {
             std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
 
             let conn = db::init_db(&app_dir).expect("failed to initialize database");
+
+            // Seed default templates on disk
+            mode_manager::seed_defaults(&app_dir);
 
             let db_conn: db::DbConn = Arc::new(Mutex::new(conn));
             app.manage(db_conn);
@@ -52,6 +56,15 @@ pub fn run() {
             commands::resize_pty,
             commands::close_pty,
             commands::get_git_info,
+            commands::list_templates,
+            commands::load_template,
+            commands::restore_project_backup,
+            commands::open_templates_folder,
+            commands::update_project_system_prompt,
+            commands::get_templates,
+            commands::create_template,
+            commands::update_template,
+            commands::delete_template,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

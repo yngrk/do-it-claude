@@ -1,5 +1,5 @@
-use tauri::{AppHandle, State};
-use crate::db::{self, DbConn, Project, Task, TaskLog};
+use tauri::{AppHandle, Manager, State};
+use crate::db::{self, DbConn, Project, Task, TaskLog, PromptTemplate};
 use crate::executor::{self, RunningProcesses, StopFlags, SessionStore, ActiveQueues};
 use crate::pty::{self, PtySessions};
 
@@ -306,4 +306,140 @@ pub fn get_git_info(path: String) -> Result<GitInfo, String> {
         .unwrap_or_default();
 
     Ok(GitInfo { branch, changes, commits })
+}
+
+fn open_folder(dir: &std::path::Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open").arg(dir).spawn().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("xdg-open").arg(dir).spawn().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer").arg(dir).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_presets(app_handle: AppHandle) -> Result<Vec<String>, String> {
+    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    crate::mode_manager::list_presets(&app_dir)
+}
+
+#[tauri::command]
+pub fn load_preset(app_handle: AppHandle, db: State<DbConn>, project_id: String, preset_name: String) -> Result<(), String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let project = db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
+        .ok_or_else(|| "Project not found".to_string())?;
+    let project_path = std::path::Path::new(&project.path);
+    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    crate::mode_manager::load_preset(&app_dir, &project_id, project_path, &preset_name)
+}
+
+#[tauri::command]
+pub fn restore_project_backup(app_handle: AppHandle, db: State<DbConn>, project_id: String) -> Result<(), String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let project = db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
+        .ok_or_else(|| "Project not found".to_string())?;
+    let project_path = std::path::Path::new(&project.path);
+    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    crate::mode_manager::restore_backup(&app_dir, &project_id, project_path)
+}
+
+#[tauri::command]
+pub fn open_presets_folder(app_handle: AppHandle) -> Result<(), String> {
+    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = app_dir.join("presets");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    open_folder(&dir)
+}
+
+#[tauri::command]
+pub fn list_skills(app_handle: AppHandle) -> Result<Vec<String>, String> {
+    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    crate::mode_manager::list_skills(&app_dir)
+}
+
+#[tauri::command]
+pub fn list_agents(app_handle: AppHandle) -> Result<Vec<String>, String> {
+    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    crate::mode_manager::list_agents(&app_dir)
+}
+
+#[tauri::command]
+pub fn install_skill(app_handle: AppHandle, db: State<DbConn>, project_id: String, skill_name: String) -> Result<(), String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let project = db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
+        .ok_or_else(|| "Project not found".to_string())?;
+    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    crate::mode_manager::install_skill(&app_dir, std::path::Path::new(&project.path), &skill_name)
+}
+
+#[tauri::command]
+pub fn install_agent(app_handle: AppHandle, db: State<DbConn>, project_id: String, agent_name: String) -> Result<(), String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let project = db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
+        .ok_or_else(|| "Project not found".to_string())?;
+    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    crate::mode_manager::install_agent(&app_dir, std::path::Path::new(&project.path), &agent_name)
+}
+
+#[tauri::command]
+pub fn get_installed_skills(db: State<DbConn>, project_id: String) -> Result<Vec<String>, String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let project = db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
+        .ok_or_else(|| "Project not found".to_string())?;
+    crate::mode_manager::list_installed_skills(std::path::Path::new(&project.path))
+}
+
+#[tauri::command]
+pub fn get_installed_agents(db: State<DbConn>, project_id: String) -> Result<Vec<String>, String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let project = db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
+        .ok_or_else(|| "Project not found".to_string())?;
+    crate::mode_manager::list_installed_agents(std::path::Path::new(&project.path))
+}
+
+#[tauri::command]
+pub fn open_skills_folder(app_handle: AppHandle) -> Result<(), String> {
+    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = app_dir.join("skills");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    open_folder(&dir)
+}
+
+#[tauri::command]
+pub fn open_agents_folder(app_handle: AppHandle) -> Result<(), String> {
+    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = app_dir.join("agents");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    open_folder(&dir)
+}
+
+#[tauri::command]
+pub fn update_project_system_prompt(db: State<DbConn>, id: String, system_prompt: Option<String>) -> Result<(), String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    db::update_project_system_prompt(&conn, &id, system_prompt.as_deref()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_templates(db: State<DbConn>) -> Result<Vec<PromptTemplate>, String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    db::get_templates(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn create_template(db: State<DbConn>, name: String, content: String) -> Result<PromptTemplate, String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    db::create_template(&conn, &name, &content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_template(db: State<DbConn>, id: String, name: String, content: String) -> Result<PromptTemplate, String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    db::update_template(&conn, &id, &name, &content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_template(db: State<DbConn>, id: String) -> Result<(), String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    db::delete_template(&conn, &id).map_err(|e| e.to_string())
 }

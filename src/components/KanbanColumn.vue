@@ -96,14 +96,21 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .kanban-column {
-  border-top: 2px solid transparent;
+  border-top: 3px solid transparent;
 }
 
-.column-backlog { border-top-color: #777; }
+.column-backlog { border-top-color: #a855f7; }
 .column-queued { border-top-color: #3b82f6; }
 
-.column-backlog .column-title { color: #999; }
-.column-queued .column-title { color: #3b82f6; }
+.column-backlog .column-header {
+  background: linear-gradient(180deg, rgba(168, 85, 247, 0.08) 0%, transparent 100%);
+}
+.column-queued .column-header {
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.08) 0%, transparent 100%);
+}
+
+.column-backlog .column-title { color: #c084fc; }
+.column-queued .column-title { color: #60a5fa; }
 
 .column-actions {
   display: flex;
@@ -118,6 +125,17 @@ onBeforeUnmount(() => {
   font-size: 0.8rem;
   opacity: 0.5;
   user-select: none;
+}
+
+.column-count {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--hover-overlay);
+  padding: 0 6px;
+  border-radius: 100px;
+  min-width: 18px;
+  text-align: center;
 }
 
 .task-list :deep(.sortable-ghost) {

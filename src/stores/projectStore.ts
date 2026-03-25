@@ -35,5 +35,17 @@ export const useProjectStore = defineStore('project', () => {
     return await invoke<boolean>('validate_project_path', { path })
   }
 
-  return { projects, loading, error, loadProjects, createProject, deleteProject, validateProjectPath }
+  async function updateSystemPrompt(projectId: string, systemPrompt: string | null) {
+    await invoke('update_project_system_prompt', { id: projectId, system_prompt: systemPrompt })
+    const project = projects.value.find(p => p.id === projectId)
+    if (project) project.system_prompt = systemPrompt
+  }
+
+  async function updateProjectMode(projectId: string, modeId: string | null) {
+    await invoke('update_project_mode', { id: projectId, mode_id: modeId })
+    const project = projects.value.find(p => p.id === projectId)
+    if (project) project.mode_id = modeId
+  }
+
+  return { projects, loading, error, loadProjects, createProject, deleteProject, validateProjectPath, updateSystemPrompt, updateProjectMode }
 })

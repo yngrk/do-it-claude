@@ -15,6 +15,7 @@ interface ClaudeStatus {
 
 const claude = ref<ClaudeStatus | null>(null)
 const checking = ref(false)
+const templates = ref<string[]>([])
 
 async function checkClaude() {
   checking.value = true
@@ -27,8 +28,17 @@ async function checkClaude() {
   }
 }
 
+async function loadTemplates() {
+  templates.value = await invoke<string[]>('list_templates')
+}
+
+async function openTemplatesFolder() {
+  await invoke('open_templates_folder')
+}
+
 onMounted(() => {
   checkClaude()
+  loadTemplates()
 })
 
 function goBack() {
@@ -104,11 +114,57 @@ function goBack() {
           <span class="text-muted">0.2.0</span>
         </div>
       </section>
+
+      <section class="glass-panel settings-section">
+        <h2 class="settings-section-title">Templates</h2>
+
+        <div class="templates-info">
+          <p class="templates-desc">
+            Templates are folders that contain <code>CLAUDE.md</code> and <code>.claude/agents/</code> files.
+            When you load a template into a project, these files are copied into the project directory so Claude Code picks them up natively.
+          </p>
+          <div class="templates-how">
+            <span class="templates-how-title">How to create a template:</span>
+            <ol class="templates-steps">
+              <li>Open the templates folder</li>
+              <li>Create a new folder with the template name</li>
+              <li>Add a <code>CLAUDE.md</code> with your system instructions</li>
+              <li>Optionally add <code>.claude/agents/*.md</code> files for custom agent definitions</li>
+            </ol>
+          </div>
+        </div>
+
+        <div class="templates-list">
+          <div v-for="name in templates" :key="name" class="template-list-item">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="template-list-icon">
+              <path d="M2 2h4l1.5 1.5H12a1 1 0 0 1 1 1V11a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+            </svg>
+            <span class="template-list-name">{{ name }}</span>
+          </div>
+          <p v-if="templates.length === 0" class="templates-empty">No templates found. Open the folder to create one.</p>
+        </div>
+
+        <div class="templates-actions">
+          <button class="open-folder-btn" @click="openTemplatesFolder">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M2 2h4l1.5 1.5H12a1 1 0 0 1 1 1V11a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+            </svg>
+            Open Templates Folder
+          </button>
+          <button class="refresh-btn" @click="loadTemplates">Refresh</button>
+        </div>
+      </section>
     </div>
   </div>
 </template>
 
 <style scoped>
+.settings-page {
+  max-width: 100%;
+  height: 100%;
+  overflow-y: auto;
+}
+
 .settings-header {
   display: flex;
   align-items: center;
@@ -118,9 +174,13 @@ function goBack() {
 
 .settings-sections {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 16px;
-  max-width: 600px;
+}
+
+.settings-sections .settings-section {
+  flex: 1 1 300px;
+  min-width: 280px;
 }
 
 .settings-section {
@@ -213,8 +273,8 @@ function goBack() {
   flex-shrink: 0;
 }
 
-.check-ok { background: #22c55e; }
-.check-fail { background: #f87171; }
+.check-ok { background: var(--success); }
+.check-fail { background: var(--error); }
 .check-loading {
   background: #777;
   animation: pulse 1s ease-in-out infinite;
@@ -231,8 +291,8 @@ function goBack() {
   color: var(--text-secondary);
 }
 
-.check-text-ok { color: #22c55e; }
-.check-text-fail { color: #f87171; }
+.check-text-ok { color: var(--success); }
+.check-text-fail { color: var(--error); }
 
 .recheck-btn {
   margin-left: auto;
@@ -285,5 +345,152 @@ function goBack() {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 0.8125rem;
   color: var(--text-secondary);
+}
+
+/* Templates section */
+.templates-info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.templates-desc {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.templates-desc code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.75rem;
+  color: #c084fc;
+  background: rgba(168, 85, 247, 0.1);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.templates-how {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 12px 14px;
+}
+
+.templates-how-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: block;
+  margin-bottom: 8px;
+}
+
+.templates-steps {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.templates-steps li {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.templates-steps code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.7rem;
+  color: #c084fc;
+  background: rgba(168, 85, 247, 0.1);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.templates-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.template-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-surface);
+}
+
+.template-list-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.template-list-name {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.templates-empty {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 0;
+  padding: 8px 0;
+}
+
+.templates-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.open-folder-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  border-radius: 6px;
+  background: rgba(168, 85, 247, 0.08);
+  color: #c084fc;
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.open-folder-btn:hover {
+  background: rgba(168, 85, 247, 0.15);
+  border-color: rgba(168, 85, 247, 0.5);
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.1);
+}
+
+.open-folder-btn svg {
+  color: #c084fc;
+}
+
+.refresh-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.refresh-btn:hover {
+  color: var(--text-primary);
+  background: var(--hover-overlay);
 }
 </style>

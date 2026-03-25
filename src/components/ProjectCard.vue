@@ -92,9 +92,9 @@ async function handleDelete(e: MouseEvent) {
   flex-shrink: 0;
 }
 
-.dot-backlog { background-color: #777; }
-.dot-queued { background-color: #3b82f6; }
-.dot-in_progress { background-color: #eab308; }
-.dot-done { background-color: #22c55e; }
-.dot-failed { background-color: #f87171; }
+.dot-backlog { background-color: var(--badge-backlog-color); }
+.dot-queued { background-color: var(--badge-queued-color); }
+.dot-in_progress { background-color: var(--warning); }
+.dot-done { background-color: var(--success); }
+.dot-failed { background-color: var(--error); }
 </style>

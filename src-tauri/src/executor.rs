@@ -162,16 +162,17 @@ pub async fn start_queue(
             project_id: project_id.clone(),
         });
 
-        let project_path = {
+        let project = {
             let conn = db.lock().unwrap();
-            let projects = db::get_projects(&conn).unwrap_or_default();
-            projects.into_iter().find(|p| p.id == project_id).map(|p| p.path.clone())
+            db::get_project_by_id(&conn, &project_id).ok().flatten()
         };
 
-        let project_path = match project_path {
+        let project = match project {
             Some(p) => p,
             None => break,
         };
+
+        let project_path = project.path.clone();
 
         // Snapshot git HEAD before running the task
         let git_hash = std::process::Command::new("git")
@@ -205,6 +206,13 @@ pub async fn start_queue(
 
         if let Some(ref sid) = existing_session {
             cmd.arg("--resume").arg(sid);
+        }
+
+        // Pass project-specific additional instructions (mode files are already deployed on disk)
+        if let Some(ref prompt) = project.system_prompt {
+            if !prompt.trim().is_empty() {
+                cmd.arg("--append-system-prompt").arg(prompt);
+            }
         }
 
         cmd.current_dir(&project_path)
