@@ -4,6 +4,7 @@ export interface Project {
   path: string
   system_prompt: string | null
   mode_id: string | null
+  project_context: string | null
   created_at: string
 }
 
@@ -12,6 +13,8 @@ export type TaskTag = string
 export const DEFAULT_TASK_TAGS: { value: string; label: string; color: string }[] = [
   { value: 'bug',      label: 'Bug',      color: '#ef4444' },
   { value: 'feature',  label: 'Feature',  color: '#8b5cf6' },
+  { value: 'update',   label: 'Update',   color: '#3b82f6' },
+  { value: 'refactor', label: 'Refactor', color: '#f97316' },
   { value: 'docs',     label: 'Docs',     color: '#f59e0b' },
   { value: 'misc',     label: 'Misc',     color: '#6366f1' },
 ]
@@ -25,10 +28,18 @@ export interface Task {
   status: 'backlog' | 'queued' | 'in_progress' | 'done' | 'failed'
   sort_order: number
   exit_code: number | null
+  max_turns: number | null
   created_at: string
   started_at: string | null
   completed_at: string | null
   updated_at: string | null
+}
+
+export interface TokenEstimate {
+  prompt_tokens: number
+  context_tokens: number
+  system_tokens: number
+  total_tokens: number
 }
 
 export interface TaskLog {

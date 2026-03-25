@@ -161,7 +161,7 @@ function close() {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.td-field-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+.td-field-input:focus { border-color: var(--accent); }
 .td-field-input::placeholder { color: var(--text-secondary); }
 
 .td-labels {
@@ -211,7 +211,7 @@ function close() {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.td-prompt-edit:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+.td-prompt-edit:focus { border-color: var(--accent); }
 .td-prompt-edit::placeholder { color: var(--text-secondary); }
 
 .td-footer {

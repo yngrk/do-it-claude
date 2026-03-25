@@ -19,8 +19,10 @@ interface ClaudeStatus {
 
 const claude = ref<ClaudeStatus | null>(null)
 const checking = ref(false)
-const templates = ref<string[]>([])
 const notificationPermission = ref<'granted' | 'denied' | 'default'>('default')
+
+const configurations = ref<string[]>([])
+const loadingConfig = ref(false)
 
 async function checkClaude() {
   checking.value = true
@@ -33,11 +35,16 @@ async function checkClaude() {
   }
 }
 
-async function loadTemplates() {
-  templates.value = await invoke<string[]>('list_templates')
+async function loadConfigurations() {
+  loadingConfig.value = true
+  try {
+    configurations.value = await invoke<string[]>('list_templates')
+  } finally {
+    loadingConfig.value = false
+  }
 }
 
-async function openTemplatesFolder() {
+async function openConfigurationsFolder() {
   await invoke('open_templates_folder')
 }
 
@@ -50,7 +57,6 @@ async function setNotificationsEnabled(value: boolean) {
     update({ enabled: false })
     return
   }
-
   const granted = await requestNotificationAccess()
   notificationPermission.value = granted ? 'granted' : 'denied'
   update({ enabled: granted })
@@ -70,13 +76,14 @@ function updateChecked<K extends keyof typeof settings.value>(key: K, checked: b
 
 onMounted(() => {
   checkClaude()
-  loadTemplates()
+  loadConfigurations()
   refreshNotificationPermission()
 })
 
 function goBack() {
   router.push('/')
 }
+
 </script>
 
 <template>
@@ -90,173 +97,137 @@ function goBack() {
       <h1>Settings</h1>
     </div>
 
-    <div class="settings-sections">
-      <section class="glass-panel settings-section">
-        <h2 class="settings-section-title">Claude CLI</h2>
+    <div class="settings-grid">
+      <!-- Left column: compact panels -->
+      <div class="settings-col">
+        <section class="glass-panel settings-section">
+          <h2 class="settings-section-title">Claude CLI</h2>
+          <div class="claude-check">
+            <div class="check-status">
+              <span v-if="checking" class="check-dot check-loading"></span>
+              <span v-else-if="claude?.found" class="check-dot check-ok"></span>
+              <span v-else class="check-dot check-fail"></span>
+              <span v-if="checking" class="check-text">Checking...</span>
+              <span v-else-if="claude?.found" class="check-text check-text-ok">Found</span>
+              <span v-else class="check-text check-text-fail">Not found</span>
+              <button class="recheck-btn" @click="checkClaude" :disabled="checking">Recheck</button>
+            </div>
+            <template v-if="claude?.found">
+              <div class="check-detail">
+                <span class="check-label">Path</span>
+                <code class="check-value">{{ claude.path }}</code>
+              </div>
+              <div class="check-detail">
+                <span class="check-label">Version</span>
+                <code class="check-value">{{ claude.version }}</code>
+              </div>
+            </template>
+            <p v-else-if="claude && !claude.found" class="check-help">
+              Install Claude Code and ensure <code>claude</code> is in your PATH.
+            </p>
+          </div>
+        </section>
 
-        <div class="claude-check">
-          <div class="check-status">
-            <span v-if="checking" class="check-dot check-loading"></span>
-            <span v-else-if="claude?.found" class="check-dot check-ok"></span>
-            <span v-else class="check-dot check-fail"></span>
+        <section class="glass-panel settings-section">
+          <h2 class="settings-section-title">Appearance</h2>
+          <div class="settings-row">
+            <span class="settings-label">Theme</span>
+            <div class="theme-toggle">
+              <span class="theme-option" :class="{ 'theme-active': theme === 'dark' }" @click="setTheme('dark')">Dark</span>
+              <span class="theme-option" :class="{ 'theme-active': theme === 'light' }" @click="setTheme('light')">Light</span>
+              <span class="theme-option theme-option-unhinged" :class="{ 'theme-active': theme === 'unhinged' }" @click="setTheme('unhinged')">Unhinged</span>
+            </div>
+          </div>
+        </section>
 
-            <span v-if="checking" class="check-text">Checking...</span>
-            <span v-else-if="claude?.found" class="check-text check-text-ok">Found</span>
-            <span v-else class="check-text check-text-fail">Not found</span>
+        <section class="glass-panel settings-section">
+          <h2 class="settings-section-title">About</h2>
+          <div class="settings-row">
+            <span class="settings-label">App</span>
+            <span class="settings-app-name">Do It Claude</span>
+          </div>
+          <div class="settings-row">
+            <span class="settings-label">Version</span>
+            <span class="text-muted">0.2.0</span>
+          </div>
+        </section>
+      </div>
 
-            <button class="recheck-btn" @click="checkClaude" :disabled="checking">Recheck</button>
+      <!-- Right column: larger panels -->
+      <div class="settings-col">
+        <section class="glass-panel settings-section">
+          <h2 class="settings-section-title">Notifications</h2>
+
+          <div class="settings-row settings-row-top">
+            <span class="settings-label">Enable</span>
+            <div class="settings-inline">
+              <label class="settings-checkbox">
+                <input
+                  type="checkbox"
+                  :checked="settings.enabled"
+                  @change="setNotificationsEnabled(checkboxChecked($event))"
+                />
+                <span>OS notifications</span>
+              </label>
+              <button class="refresh-btn" @click="testNotifications" :disabled="!settings.enabled">Test</button>
+            </div>
           </div>
 
-          <template v-if="claude?.found">
-            <div class="check-detail">
-              <span class="check-label">Path</span>
-              <code class="check-value">{{ claude.path }}</code>
+          <div class="settings-row">
+            <span class="settings-label">Permission</span>
+            <div class="settings-inline">
+              <span class="text-muted">{{ notificationPermission }}</span>
+              <button class="recheck-btn" @click="refreshNotificationPermission">Refresh</button>
             </div>
-            <div class="check-detail">
-              <span class="check-label">Version</span>
-              <code class="check-value">{{ claude.version }}</code>
-            </div>
-          </template>
-
-          <p v-else-if="claude && !claude.found" class="check-help">
-            Install Claude Code and ensure <code>claude</code> is in your PATH.
-          </p>
-        </div>
-      </section>
-
-      <section class="glass-panel settings-section">
-        <h2 class="settings-section-title">Appearance</h2>
-        <div class="settings-row">
-          <span class="settings-label">Theme</span>
-          <div class="theme-toggle">
-            <span class="theme-option" :class="{ 'theme-active': theme === 'dark' }" @click="setTheme('dark')">Dark</span>
-            <span class="theme-option" :class="{ 'theme-active': theme === 'light' }" @click="setTheme('light')">Light</span>
-            <span class="theme-option theme-option-unhinged" :class="{ 'theme-active': theme === 'unhinged' }" @click="setTheme('unhinged')">Unhinged</span>
           </div>
-        </div>
-      </section>
 
-      <section class="glass-panel settings-section">
-        <h2 class="settings-section-title">Notifications</h2>
-
-        <div class="settings-row settings-row-top">
-          <span class="settings-label">Enable</span>
-          <div class="settings-inline">
+          <div class="settings-option-list">
             <label class="settings-checkbox">
-              <input
-                type="checkbox"
-                :checked="settings.enabled"
-                @change="setNotificationsEnabled(checkboxChecked($event))"
-              />
-              <span>OS notifications</span>
+              <input type="checkbox" :checked="settings.notify_on_task_done" :disabled="!settings.enabled" @change="updateChecked('notify_on_task_done', checkboxChecked($event))" />
+              <span>Task completion</span>
             </label>
-            <button class="refresh-btn" @click="testNotifications" :disabled="!settings.enabled">Test notification</button>
+            <label class="settings-checkbox">
+              <input type="checkbox" :checked="settings.notify_on_task_failed" :disabled="!settings.enabled" @change="updateChecked('notify_on_task_failed', checkboxChecked($event))" />
+              <span>Task failure</span>
+            </label>
+            <label class="settings-checkbox">
+              <input type="checkbox" :checked="settings.notify_on_chat_reply" :disabled="!settings.enabled" @change="updateChecked('notify_on_chat_reply', checkboxChecked($event))" />
+              <span>Claude chat replies</span>
+            </label>
+            <label class="settings-checkbox">
+              <input type="checkbox" :checked="settings.suppress_when_focused" :disabled="!settings.enabled" @change="updateChecked('suppress_when_focused', checkboxChecked($event))" />
+              <span>Suppress when focused</span>
+            </label>
           </div>
-        </div>
+        </section>
 
-        <div class="settings-row">
-          <span class="settings-label">Permission</span>
-          <div class="settings-inline">
-            <span class="text-muted">{{ notificationPermission }}</span>
-            <button class="recheck-btn" @click="refreshNotificationPermission">Refresh</button>
+        <section class="glass-panel settings-section">
+          <h2 class="settings-section-title">Configurations</h2>
+
+          <div class="config-list">
+            <div v-if="loadingConfig" class="config-empty">Loading...</div>
+            <template v-else-if="configurations.length > 0">
+              <div v-for="name in configurations" :key="name" class="config-item">
+                <svg width="13" height="13" viewBox="0 0 14 14" fill="none" class="config-item-icon">
+                  <path d="M2 2h4l1.5 1.5H12a1 1 0 0 1 1 1V11a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                </svg>
+                <span class="config-item-name">{{ name }}</span>
+              </div>
+            </template>
+            <div v-else class="config-empty">No configurations found.</div>
           </div>
-        </div>
 
-        <div class="settings-option-list">
-          <label class="settings-checkbox">
-            <input
-              type="checkbox"
-              :checked="settings.notify_on_task_done"
-              :disabled="!settings.enabled"
-              @change="updateChecked('notify_on_task_done', checkboxChecked($event))"
-            />
-            <span>Notify on task completion</span>
-          </label>
-          <label class="settings-checkbox">
-            <input
-              type="checkbox"
-              :checked="settings.notify_on_task_failed"
-              :disabled="!settings.enabled"
-              @change="updateChecked('notify_on_task_failed', checkboxChecked($event))"
-            />
-            <span>Notify on task failure</span>
-          </label>
-          <label class="settings-checkbox">
-            <input
-              type="checkbox"
-              :checked="settings.notify_on_chat_reply"
-              :disabled="!settings.enabled"
-              @change="updateChecked('notify_on_chat_reply', checkboxChecked($event))"
-            />
-            <span>Notify on Claude chat replies</span>
-          </label>
-          <label class="settings-checkbox">
-            <input
-              type="checkbox"
-              :checked="settings.suppress_when_focused"
-              :disabled="!settings.enabled"
-              @change="updateChecked('suppress_when_focused', checkboxChecked($event))"
-            />
-            <span>Suppress while app is focused</span>
-          </label>
-        </div>
-
-        <p class="templates-desc settings-help">
-          Notifications open the relevant project and task when clicked. Task starts, queue stop events, and chat streaming chunks do not notify.
-        </p>
-      </section>
-
-      <section class="glass-panel settings-section">
-        <h2 class="settings-section-title">About</h2>
-        <div class="settings-row">
-          <span class="settings-label">App</span>
-          <span class="settings-app-name">Do It Claude</span>
-        </div>
-        <div class="settings-row">
-          <span class="settings-label">Version</span>
-          <span class="text-muted">0.2.0</span>
-        </div>
-      </section>
-
-      <section class="glass-panel settings-section">
-        <h2 class="settings-section-title">Templates</h2>
-
-        <div class="templates-info">
-          <p class="templates-desc">
-            Templates are folders that contain <code>CLAUDE.md</code> and <code>.claude/agents/</code> files.
-            When you load a template into a project, these files are copied into the project directory so Claude Code picks them up natively.
-          </p>
-          <div class="templates-how">
-            <span class="templates-how-title">How to create a template:</span>
-            <ol class="templates-steps">
-              <li>Open the templates folder</li>
-              <li>Create a new folder with the template name</li>
-              <li>Add a <code>CLAUDE.md</code> with your system instructions</li>
-              <li>Optionally add <code>.claude/agents/*.md</code> files for custom agent definitions</li>
-            </ol>
+          <div class="settings-inline" style="margin-top: 12px;">
+            <button class="open-folder-btn" @click="openConfigurationsFolder">
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                <path d="M2 2h4l1.5 1.5H12a1 1 0 0 1 1 1V11a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+              </svg>
+              Open Folder
+            </button>
+            <button class="recheck-btn" @click="loadConfigurations" :disabled="loadingConfig">Refresh</button>
           </div>
-        </div>
-
-        <div class="templates-list">
-          <div v-for="name in templates" :key="name" class="template-list-item">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="template-list-icon">
-              <path d="M2 2h4l1.5 1.5H12a1 1 0 0 1 1 1V11a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-            </svg>
-            <span class="template-list-name">{{ name }}</span>
-          </div>
-          <p v-if="templates.length === 0" class="templates-empty">No templates found. Open the folder to create one.</p>
-        </div>
-
-        <div class="templates-actions">
-          <button class="open-folder-btn" @click="openTemplatesFolder">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M2 2h4l1.5 1.5H12a1 1 0 0 1 1 1V11a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-            </svg>
-            Open Templates Folder
-          </button>
-          <button class="refresh-btn" @click="loadTemplates">Refresh</button>
-        </div>
-      </section>
+        </section>
+      </div>
     </div>
   </div>
 </template>
@@ -275,15 +246,23 @@ function goBack() {
   margin-bottom: 24px;
 }
 
-.settings-sections {
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.settings-col {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 16px;
 }
 
-.settings-sections .settings-section {
-  flex: 1 1 300px;
-  min-width: 280px;
+@media (max-width: 560px) {
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .settings-section {
@@ -345,10 +324,6 @@ function goBack() {
   accent-color: var(--accent);
 }
 
-.settings-help {
-  margin-top: 12px;
-}
-
 .settings-app-name {
   font-weight: 600;
   font-size: 1rem;
@@ -374,9 +349,6 @@ function goBack() {
   font-weight: 500;
   color: var(--text-muted);
   transition: color 0.15s ease, background 0.15s ease;
-}
-
-.theme-option {
   border-right: 1px solid var(--border);
 }
 
@@ -483,114 +455,46 @@ function goBack() {
   color: var(--text-secondary);
 }
 
-/* Templates section */
-.templates-info {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.templates-desc {
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-  line-height: 1.6;
-  margin: 0;
-}
-
-.templates-desc code {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 0.75rem;
-  color: #c084fc;
-  background: rgba(168, 85, 247, 0.1);
-  padding: 1px 5px;
-  border-radius: 3px;
-}
-
-.templates-how {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  padding: 12px 14px;
-}
-
-.templates-how-title {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  display: block;
-  margin-bottom: 8px;
-}
-
-.templates-steps {
-  margin: 0;
-  padding-left: 18px;
+.config-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  margin-bottom: 12px;
 }
 
-.templates-steps li {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  line-height: 1.5;
-}
-
-.templates-steps code {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 0.7rem;
-  color: #c084fc;
-  background: rgba(168, 85, 247, 0.1);
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-
-.templates-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 14px;
-}
-
-.template-list-item {
+.config-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--bg-surface);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
 }
 
-.template-list-icon {
+.config-item:last-child {
+  border-bottom: none;
+}
+
+.config-item-icon {
   color: var(--text-muted);
   flex-shrink: 0;
 }
 
-.template-list-name {
+.config-item-name {
   font-size: 0.8125rem;
-  font-weight: 500;
-  color: var(--text-primary);
+  color: var(--text-secondary);
 }
 
-.templates-empty {
+.config-empty {
   font-size: 0.8125rem;
   color: var(--text-muted);
-  margin: 0;
-  padding: 8px 0;
-}
-
-.templates-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  padding: 4px 0;
 }
 
 .open-folder-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
+  padding: 4px 10px;
   border: 1px solid rgba(168, 85, 247, 0.3);
   border-radius: 6px;
   background: rgba(168, 85, 247, 0.08);
@@ -605,11 +509,6 @@ function goBack() {
 .open-folder-btn:hover {
   background: rgba(168, 85, 247, 0.15);
   border-color: rgba(168, 85, 247, 0.5);
-  box-shadow: 0 0 12px rgba(168, 85, 247, 0.1);
-}
-
-.open-folder-btn svg {
-  color: #c084fc;
 }
 
 .refresh-btn {
@@ -628,5 +527,10 @@ function goBack() {
 .refresh-btn:hover {
   color: var(--text-primary);
   background: var(--hover-overlay);
+}
+
+.refresh-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 </style>

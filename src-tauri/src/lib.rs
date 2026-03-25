@@ -3,6 +3,7 @@ mod commands;
 mod executor;
 mod pty;
 mod mode_manager;
+mod context_generator;
 
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -71,6 +72,17 @@ pub fn run() {
             commands::create_template,
             commands::update_template,
             commands::delete_template,
+            commands::list_skills,
+            commands::list_agents,
+            commands::open_skills_folder,
+            commands::open_agents_folder,
+            commands::install_skill,
+            commands::install_agent,
+            commands::import_claude_file,
+            commands::generate_project_context,
+            commands::update_task_max_turns,
+            commands::estimate_task_turns,
+            commands::estimate_task_tokens,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

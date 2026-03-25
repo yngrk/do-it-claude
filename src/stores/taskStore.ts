@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { Task, TaskLog, TaskMessage, TaskTag } from '../types'
+import type { Task, TaskLog, TaskMessage, TaskTag, TokenEstimate } from '../types'
 
 export const useTaskStore = defineStore('task', () => {
   const tasks = ref<Task[]>([])
@@ -214,6 +214,21 @@ export const useTaskStore = defineStore('task', () => {
     await invoke('reset_session', { projectId })
   }
 
+  async function updateTaskMaxTurns(taskId: string, maxTurns: number | null) {
+    const updated = await invoke<Task>('update_task_max_turns', { id: taskId, maxTurns })
+    const idx = tasks.value.findIndex(t => t.id === taskId)
+    if (idx !== -1) tasks.value[idx] = updated
+    return updated
+  }
+
+  async function estimateTaskTurns(description: string, tag: string | null): Promise<number> {
+    return await invoke<number>('estimate_task_turns', { description, tag })
+  }
+
+  async function estimateTaskTokens(taskId: string): Promise<TokenEstimate> {
+    return await invoke<TokenEstimate>('estimate_task_tokens', { taskId })
+  }
+
   return {
     tasks,
     loading,
@@ -237,5 +252,8 @@ export const useTaskStore = defineStore('task', () => {
     pauseQueue,
     cancelAndRevert,
     resetSession,
+    updateTaskMaxTurns,
+    estimateTaskTurns,
+    estimateTaskTokens,
   }
 })

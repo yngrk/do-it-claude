@@ -2,7 +2,7 @@
 import { ref, watch, computed, nextTick } from 'vue'
 import { useTaskStore } from '../stores/taskStore'
 import { DEFAULT_TASK_TAGS } from '../types'
-import type { Task } from '../types'
+import type { Task, TokenEstimate } from '../types'
 
 const props = defineProps<{ task: Task | null; initialFocus?: 'details' | 'chat' }>()
 const emit = defineEmits<{ close: []; retry: [taskId: string]; 'move-to-backlog': [taskId: string] }>()
@@ -12,6 +12,9 @@ const taskStore = useTaskStore()
 const editTitle = ref('')
 const editDescription = ref('')
 const editTag = ref<string | null>(null)
+const editMaxTurns = ref<number | null>(null)
+const tokenEstimate = ref<TokenEstimate | null>(null)
+const estimatedAutoTurns = ref<number | null>(null)
 const saving = ref(false)
 const logsExpanded = ref(false)
 const chatInput = ref('')
@@ -30,6 +33,13 @@ watch(() => props.task, (task) => {
     editDescription.value = task.description
     editTag.value = task.tag || null
     chatInput.value = ''
+    editMaxTurns.value = task.max_turns ?? null
+    taskStore.estimateTaskTokens(task.id).then(est => {
+      tokenEstimate.value = est
+    }).catch(() => {})
+    taskStore.estimateTaskTurns(task.description, task.tag).then(turns => {
+      estimatedAutoTurns.value = turns
+    }).catch(() => {})
   }
 })
 
@@ -57,6 +67,9 @@ async function save() {
       description: editDescription.value,
       tag: editTag.value,
     })
+    if (editMaxTurns.value !== (props.task.max_turns ?? null)) {
+      await taskStore.updateTaskMaxTurns(props.task.id, editMaxTurns.value)
+    }
   } finally {
     saving.value = false
   }
@@ -159,6 +172,7 @@ const isDirty = computed(() => {
   return editTitle.value !== props.task.title
     || editDescription.value !== props.task.description
     || (editTag.value || null) !== (props.task.tag || null)
+    || editMaxTurns.value !== (props.task.max_turns ?? null)
 })
 
 function formatTimestamp(date: string) {
@@ -264,6 +278,36 @@ watch(
           <div v-else class="td-prompt-view">{{ task.description || 'No prompt provided.' }}</div>
         </div>
 
+        <!-- Max Turns -->
+        <div class="td-section">
+          <span class="td-section-label">Max Turns</span>
+          <div class="td-turns-row">
+            <input
+              v-if="isEditable"
+              :value="editMaxTurns ?? ''"
+              @input="editMaxTurns = $event.target.value === '' ? null : Math.max(1, Math.min(50, parseInt($event.target.value) || 0))"
+              type="number"
+              min="1"
+              max="50"
+              class="td-turns-input"
+              placeholder="Auto"
+            />
+            <span v-else class="td-turns-value">
+              {{ task.max_turns ? `${task.max_turns} turns` : `~${estimatedAutoTurns ?? '?'} turns (auto)` }}
+            </span>
+            <span v-if="estimatedAutoTurns && isEditable" class="td-turns-hint">
+              Auto-estimate: ~{{ estimatedAutoTurns }} turns
+            </span>
+          </div>
+        </div>
+
+        <!-- Token estimate bar (editable tasks) -->
+        <div v-if="tokenEstimate && isEditable" class="td-token-bar">
+          <span class="td-token-label">Est. input:</span>
+          <span class="td-token-value">~{{ tokenEstimate.total_tokens.toLocaleString() }} tokens</span>
+          <span class="td-token-breakdown">(prompt: {{ tokenEstimate.prompt_tokens }}, context: {{ tokenEstimate.context_tokens }}, system: {{ tokenEstimate.system_tokens }})</span>
+        </div>
+
         <!-- Meta (only for non-editable / executed tasks) -->
         <div v-if="!isEditable" class="td-meta">
           <div class="td-meta-item" v-if="task.exit_code !== null">
@@ -285,6 +329,10 @@ watch(
           <div class="td-meta-item" v-if="formatDate(task.completed_at)">
             <span class="td-meta-label">Completed</span>
             <span class="td-meta-value">{{ formatDate(task.completed_at) }}</span>
+          </div>
+          <div class="td-meta-item" v-if="tokenEstimate">
+            <span class="td-meta-label">Est. Input Tokens</span>
+            <span class="td-meta-value">~{{ tokenEstimate.total_tokens.toLocaleString() }}</span>
           </div>
         </div>
 
@@ -484,7 +532,6 @@ watch(
 
 .td-field-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 .td-field-input::placeholder {
@@ -589,7 +636,6 @@ watch(
 
 .td-prompt-edit:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 .td-prompt-edit::placeholder {
@@ -750,7 +796,6 @@ watch(
 
 .td-chat-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 .td-chat-input:disabled {
@@ -855,5 +900,66 @@ watch(
   display: flex;
   gap: 8px;
   margin-right: auto;
+}
+
+.td-turns-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.td-turns-input {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-xs);
+  padding: 6px 10px;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-family: inherit;
+  outline: none;
+  width: 80px;
+  transition: border-color 0.15s ease;
+}
+
+.td-turns-input:focus {
+  border-color: var(--accent);
+}
+
+.td-turns-input::placeholder {
+  color: var(--text-muted);
+}
+
+.td-turns-value {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.td-turns-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.td-token-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  font-size: 0.75rem;
+}
+
+.td-token-label {
+  color: var(--text-muted);
+}
+
+.td-token-value {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.td-token-breakdown {
+  color: var(--text-muted);
 }
 </style>

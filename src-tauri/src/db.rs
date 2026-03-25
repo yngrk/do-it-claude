@@ -147,6 +147,7 @@ pub struct Project {
     pub created_at: String,
     pub system_prompt: Option<String>,
     pub mode_id: Option<String>,
+    pub project_context: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +160,7 @@ pub struct Task {
     pub status: String,
     pub sort_order: i32,
     pub exit_code: Option<i32>,
+    pub max_turns: Option<i32>,
     pub created_at: String,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
@@ -271,6 +273,12 @@ pub fn init_db(app_dir: &std::path::Path) -> Result<Connection> {
     let _ = conn.execute("ALTER TABLE projects ADD COLUMN system_prompt TEXT", []);
     let _ = conn.execute("ALTER TABLE projects ADD COLUMN mode_id TEXT", []);
 
+    // Migration: add project_context to projects
+    let _ = conn.execute("ALTER TABLE projects ADD COLUMN project_context TEXT", []);
+
+    // Migration: add max_turns to tasks
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN max_turns INTEGER", []);
+
     // Seed default mode if not present
     let has_default: bool = conn.query_row(
         "SELECT COUNT(*) FROM prompt_templates",
@@ -314,6 +322,7 @@ pub fn create_project(conn: &Connection, name: &str, path: &str) -> Result<Proje
         created_at: Utc::now().to_rfc3339(),
         system_prompt: None,
         mode_id: None,
+        project_context: None,
     };
     conn.execute(
         "INSERT INTO projects (id, name, path, created_at) VALUES (?1, ?2, ?3, ?4)",
@@ -323,7 +332,7 @@ pub fn create_project(conn: &Connection, name: &str, path: &str) -> Result<Proje
 }
 
 pub fn get_projects(conn: &Connection) -> Result<Vec<Project>> {
-    let mut stmt = conn.prepare("SELECT id, name, path, created_at, system_prompt, mode_id FROM projects ORDER BY created_at DESC")?;
+    let mut stmt = conn.prepare("SELECT id, name, path, created_at, system_prompt, mode_id, project_context FROM projects ORDER BY created_at DESC")?;
     let projects = stmt.query_map([], |row| {
         Ok(Project {
             id: row.get(0)?,
@@ -332,13 +341,14 @@ pub fn get_projects(conn: &Connection) -> Result<Vec<Project>> {
             created_at: row.get(3)?,
             system_prompt: row.get(4)?,
             mode_id: row.get(5)?,
+            project_context: row.get(6)?,
         })
     })?.collect::<Result<Vec<_>>>()?;
     Ok(projects)
 }
 
 pub fn get_project_by_id(conn: &Connection, id: &str) -> Result<Option<Project>> {
-    let mut stmt = conn.prepare("SELECT id, name, path, created_at, system_prompt, mode_id FROM projects WHERE id = ?1")?;
+    let mut stmt = conn.prepare("SELECT id, name, path, created_at, system_prompt, mode_id, project_context FROM projects WHERE id = ?1")?;
     let mut rows = stmt.query_map(params![id], |row| {
         Ok(Project {
             id: row.get(0)?,
@@ -347,6 +357,7 @@ pub fn get_project_by_id(conn: &Connection, id: &str) -> Result<Option<Project>>
             created_at: row.get(3)?,
             system_prompt: row.get(4)?,
             mode_id: row.get(5)?,
+            project_context: row.get(6)?,
         })
     })?;
     match rows.next() {
@@ -380,6 +391,14 @@ pub fn update_project_mode(conn: &Connection, id: &str, mode_id: Option<&str>) -
     Ok(())
 }
 
+pub fn update_project_context(conn: &Connection, id: &str, context: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE projects SET project_context = ?1 WHERE id = ?2",
+        params![context, id],
+    )?;
+    Ok(())
+}
+
 pub fn create_task(conn: &Connection, project_id: &str, title: &str, description: &str, tag: Option<&str>) -> Result<Task> {
     let max_order: i32 = conn.query_row(
         "SELECT COALESCE(MAX(sort_order), -1) FROM tasks WHERE project_id = ?1",
@@ -396,6 +415,7 @@ pub fn create_task(conn: &Connection, project_id: &str, title: &str, description
         status: "backlog".to_string(),
         sort_order: max_order + 1,
         exit_code: None,
+        max_turns: None,
         created_at: Utc::now().to_rfc3339(),
         started_at: None,
         completed_at: None,
@@ -410,7 +430,7 @@ pub fn create_task(conn: &Connection, project_id: &str, title: &str, description
 
 pub fn get_tasks(conn: &Connection, project_id: &str) -> Result<Vec<Task>> {
     let mut stmt = conn.prepare(
-        "SELECT id, project_id, title, description, tag, status, sort_order, exit_code, created_at, started_at, completed_at, updated_at FROM tasks WHERE project_id = ?1 ORDER BY sort_order ASC"
+        "SELECT id, project_id, title, description, tag, status, sort_order, exit_code, max_turns, created_at, started_at, completed_at, updated_at FROM tasks WHERE project_id = ?1 ORDER BY sort_order ASC"
     )?;
     let tasks = stmt.query_map(params![project_id], |row| {
         Ok(Task {
@@ -422,10 +442,11 @@ pub fn get_tasks(conn: &Connection, project_id: &str) -> Result<Vec<Task>> {
             status: row.get(5)?,
             sort_order: row.get(6)?,
             exit_code: row.get(7)?,
-            created_at: row.get(8)?,
-            started_at: row.get(9)?,
-            completed_at: row.get(10)?,
-            updated_at: row.get(11)?,
+            max_turns: row.get(8)?,
+            created_at: row.get(9)?,
+            started_at: row.get(10)?,
+            completed_at: row.get(11)?,
+            updated_at: row.get(12)?,
         })
     })?.collect::<Result<Vec<_>>>()?;
     Ok(tasks)
@@ -433,7 +454,7 @@ pub fn get_tasks(conn: &Connection, project_id: &str) -> Result<Vec<Task>> {
 
 pub fn get_task_by_id(conn: &Connection, id: &str) -> Result<Option<Task>> {
     let mut stmt = conn.prepare(
-        "SELECT id, project_id, title, description, tag, status, sort_order, exit_code, created_at, started_at, completed_at, updated_at FROM tasks WHERE id = ?1"
+        "SELECT id, project_id, title, description, tag, status, sort_order, exit_code, max_turns, created_at, started_at, completed_at, updated_at FROM tasks WHERE id = ?1"
     )?;
     let mut rows = stmt.query_map(params![id], |row| {
         Ok(Task {
@@ -445,10 +466,11 @@ pub fn get_task_by_id(conn: &Connection, id: &str) -> Result<Option<Task>> {
             status: row.get(5)?,
             sort_order: row.get(6)?,
             exit_code: row.get(7)?,
-            created_at: row.get(8)?,
-            started_at: row.get(9)?,
-            completed_at: row.get(10)?,
-            updated_at: row.get(11)?,
+            max_turns: row.get(8)?,
+            created_at: row.get(9)?,
+            started_at: row.get(10)?,
+            completed_at: row.get(11)?,
+            updated_at: row.get(12)?,
         })
     })?;
     match rows.next() {
@@ -470,7 +492,7 @@ pub fn update_task(conn: &Connection, id: &str, title: Option<&str>, description
     }
     let now = Utc::now().to_rfc3339();
     conn.execute("UPDATE tasks SET updated_at = ?1 WHERE id = ?2", params![now, id])?;
-    let mut stmt = conn.prepare("SELECT id, project_id, title, description, tag, status, sort_order, exit_code, created_at, started_at, completed_at, updated_at FROM tasks WHERE id = ?1")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, title, description, tag, status, sort_order, exit_code, max_turns, created_at, started_at, completed_at, updated_at FROM tasks WHERE id = ?1")?;
     stmt.query_row(params![id], |row| {
         Ok(Task {
             id: row.get(0)?,
@@ -481,10 +503,11 @@ pub fn update_task(conn: &Connection, id: &str, title: Option<&str>, description
             status: row.get(5)?,
             sort_order: row.get(6)?,
             exit_code: row.get(7)?,
-            created_at: row.get(8)?,
-            started_at: row.get(9)?,
-            completed_at: row.get(10)?,
-            updated_at: row.get(11)?,
+            max_turns: row.get(8)?,
+            created_at: row.get(9)?,
+            started_at: row.get(10)?,
+            completed_at: row.get(11)?,
+            updated_at: row.get(12)?,
         })
     })
 }
@@ -502,7 +525,7 @@ pub fn move_task(conn: &Connection, id: &str, new_status: &str, new_sort_order: 
         "UPDATE tasks SET status = ?1, sort_order = ?2, updated_at = ?3 WHERE id = ?4",
         params![new_status, new_sort_order, now, id],
     )?;
-    let mut stmt = conn.prepare("SELECT id, project_id, title, description, tag, status, sort_order, exit_code, created_at, started_at, completed_at, updated_at FROM tasks WHERE id = ?1")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, title, description, tag, status, sort_order, exit_code, max_turns, created_at, started_at, completed_at, updated_at FROM tasks WHERE id = ?1")?;
     stmt.query_row(params![id], |row| {
         Ok(Task {
             id: row.get(0)?,
@@ -513,10 +536,11 @@ pub fn move_task(conn: &Connection, id: &str, new_status: &str, new_sort_order: 
             status: row.get(5)?,
             sort_order: row.get(6)?,
             exit_code: row.get(7)?,
-            created_at: row.get(8)?,
-            started_at: row.get(9)?,
-            completed_at: row.get(10)?,
-            updated_at: row.get(11)?,
+            max_turns: row.get(8)?,
+            created_at: row.get(9)?,
+            started_at: row.get(10)?,
+            completed_at: row.get(11)?,
+            updated_at: row.get(12)?,
         })
     })
 }
@@ -542,7 +566,7 @@ pub fn set_task_completed(conn: &Connection, id: &str, exit_code: i32) -> Result
 
 pub fn get_next_queued_task(conn: &Connection, project_id: &str) -> Result<Option<Task>> {
     let mut stmt = conn.prepare(
-        "SELECT id, project_id, title, description, tag, status, sort_order, exit_code, created_at, started_at, completed_at, updated_at FROM tasks WHERE project_id = ?1 AND status = 'queued' ORDER BY sort_order ASC LIMIT 1"
+        "SELECT id, project_id, title, description, tag, status, sort_order, exit_code, max_turns, created_at, started_at, completed_at, updated_at FROM tasks WHERE project_id = ?1 AND status = 'queued' ORDER BY sort_order ASC LIMIT 1"
     )?;
     let mut rows = stmt.query_map(params![project_id], |row| {
         Ok(Task {
@@ -554,10 +578,11 @@ pub fn get_next_queued_task(conn: &Connection, project_id: &str) -> Result<Optio
             status: row.get(5)?,
             sort_order: row.get(6)?,
             exit_code: row.get(7)?,
-            created_at: row.get(8)?,
-            started_at: row.get(9)?,
-            completed_at: row.get(10)?,
-            updated_at: row.get(11)?,
+            max_turns: row.get(8)?,
+            created_at: row.get(9)?,
+            started_at: row.get(10)?,
+            completed_at: row.get(11)?,
+            updated_at: row.get(12)?,
         })
     })?;
     match rows.next() {
@@ -714,5 +739,13 @@ pub fn get_mode_files(conn: &Connection, mode_id: &str) -> Result<Vec<ModeFile>>
 
 pub fn delete_mode_files(conn: &Connection, mode_id: &str) -> Result<()> {
     conn.execute("DELETE FROM mode_files WHERE mode_id = ?1", params![mode_id])?;
+    Ok(())
+}
+
+pub fn update_task_max_turns(conn: &Connection, id: &str, max_turns: Option<i32>) -> Result<()> {
+    conn.execute(
+        "UPDATE tasks SET max_turns = ?1, updated_at = ?2 WHERE id = ?3",
+        params![max_turns, Utc::now().to_rfc3339(), id],
+    )?;
     Ok(())
 }

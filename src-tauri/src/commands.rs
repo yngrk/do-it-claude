@@ -669,9 +669,41 @@ pub fn open_agents_folder(app_handle: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn import_claude_file(app_handle: AppHandle, file_path: String, file_type: String) -> Result<String, String> {
+    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dest_dir = match file_type.as_str() {
+        "skill" => app_dir.join("skills"),
+        "agent" => app_dir.join("agents"),
+        _ => return Err(format!("Unknown file type: {}", file_type)),
+    };
+    std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+    let src = std::path::Path::new(&file_path);
+    let filename = src.file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "Invalid file path".to_string())?;
+    let dest = dest_dir.join(filename);
+    std::fs::copy(src, &dest).map_err(|e| e.to_string())?;
+    Ok(filename.to_string())
+}
+
+#[tauri::command]
 pub fn update_project_system_prompt(db: State<DbConn>, id: String, system_prompt: Option<String>) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     db::update_project_system_prompt(&conn, &id, system_prompt.as_deref()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn generate_project_context(db: State<DbConn>, project_id: String) -> Result<String, String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let project = db::get_project_by_id(&conn, &project_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Project not found".to_string())?;
+
+    let context = crate::context_generator::generate_context(std::path::Path::new(&project.path));
+
+    db::update_project_context(&conn, &project_id, &context).map_err(|e| e.to_string())?;
+
+    Ok(context)
 }
 
 #[tauri::command]
@@ -696,4 +728,52 @@ pub fn update_template(db: State<DbConn>, id: String, name: String, content: Str
 pub fn delete_template(db: State<DbConn>, id: String) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     db::delete_template(&conn, &id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_task_max_turns(db: State<DbConn>, id: String, max_turns: Option<i32>) -> Result<Task, String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    db::update_task_max_turns(&conn, &id, max_turns).map_err(|e| e.to_string())?;
+    db::get_task_by_id(&conn, &id).map_err(|e| e.to_string())?
+        .ok_or_else(|| "Task not found".to_string())
+}
+
+#[tauri::command]
+pub fn estimate_task_turns(description: String, tag: Option<String>) -> i32 {
+    crate::context_generator::estimate_max_turns(&description, tag.as_deref())
+}
+
+#[derive(serde::Serialize)]
+pub struct TokenEstimate {
+    prompt_tokens: usize,
+    context_tokens: usize,
+    system_tokens: usize,
+    total_tokens: usize,
+}
+
+#[tauri::command]
+pub fn estimate_task_tokens(db: State<DbConn>, task_id: String) -> Result<TokenEstimate, String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let task = db::get_task_by_id(&conn, &task_id).map_err(|e| e.to_string())?
+        .ok_or_else(|| "Task not found".to_string())?;
+    let project = db::get_project_by_id(&conn, &task.project_id).map_err(|e| e.to_string())?
+        .ok_or_else(|| "Project not found".to_string())?;
+
+    let chars_per_token = 4;
+    let prompt_tokens = task.description.len() / chars_per_token;
+    let context_tokens = project.project_context
+        .as_ref()
+        .map(|c| c.len() / chars_per_token)
+        .unwrap_or(0);
+    let system_tokens = project.system_prompt
+        .as_ref()
+        .map(|s| s.len() / chars_per_token)
+        .unwrap_or(0);
+
+    Ok(TokenEstimate {
+        prompt_tokens,
+        context_tokens,
+        system_tokens,
+        total_tokens: prompt_tokens + context_tokens + system_tokens,
+    })
 }

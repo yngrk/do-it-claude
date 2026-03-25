@@ -133,6 +133,19 @@ pub async fn start_queue(
         flags.remove(&project_id);
     }
 
+    // Auto-refresh project context before starting
+    {
+        let project = {
+            let conn = db.lock().unwrap();
+            db::get_project_by_id(&conn, &project_id).ok().flatten()
+        };
+        if let Some(ref p) = project {
+            let context = crate::context_generator::generate_context(std::path::Path::new(&p.path));
+            let conn = db.lock().unwrap();
+            let _ = db::update_project_context(&conn, &project_id, &context);
+        }
+    }
+
     // active flag was already set by try_mark_active in the command handler
 
     loop {
@@ -192,12 +205,6 @@ pub async fn start_queue(
         let claude_bin = resolve_claude_path();
         let shell_path = get_shell_path();
 
-        // Check for existing session to resume
-        let existing_session = {
-            let store = sessions.lock().unwrap();
-            store.get(&task.id).cloned()
-        };
-
         let mut cmd = Command::new(&claude_bin);
         cmd.arg("-p")
             .arg(&task.description)
@@ -206,15 +213,26 @@ pub async fn start_queue(
             .arg("stream-json")
             .arg("--verbose");
 
-        if let Some(ref sid) = existing_session {
-            cmd.arg("--resume").arg(sid);
-        }
+        // Determine max turns: use task override if set, otherwise auto-estimate
+        let max_turns = task.max_turns.unwrap_or_else(|| {
+            crate::context_generator::estimate_max_turns(&task.description, task.tag.as_deref())
+        });
+        cmd.arg("--max-turns").arg(max_turns.to_string());
 
-        // Pass project-specific additional instructions (mode files are already deployed on disk)
+        // Build combined context: project structure map + user instructions
+        let mut context_parts: Vec<String> = Vec::new();
+        if let Some(ref ctx) = project.project_context {
+            if !ctx.trim().is_empty() {
+                context_parts.push(ctx.clone());
+            }
+        }
         if let Some(ref prompt) = project.system_prompt {
             if !prompt.trim().is_empty() {
-                cmd.arg("--append-system-prompt").arg(prompt);
+                context_parts.push(prompt.clone());
             }
+        }
+        if !context_parts.is_empty() {
+            cmd.arg("--append-system-prompt").arg(context_parts.join("\n\n"));
         }
 
         cmd.current_dir(&project_path)

@@ -103,10 +103,8 @@ onBeforeUnmount(() => {
 .column-queued { border-top-color: #3b82f6; }
 
 .column-backlog .column-header {
-  background: linear-gradient(180deg, rgba(168, 85, 247, 0.08) 0%, transparent 100%);
 }
 .column-queued .column-header {
-  background: linear-gradient(180deg, rgba(59, 130, 246, 0.08) 0%, transparent 100%);
 }
 
 .column-backlog .column-title { color: #c084fc; }

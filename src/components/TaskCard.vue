@@ -15,6 +15,38 @@ const tagInfo = computed(() => {
   if (!props.task.tag) return null
   return DEFAULT_TASK_TAGS.find(t => t.value === props.task.tag) ?? null
 })
+
+// Client-side turn estimation (mirrors backend heuristic, avoids IPC per card)
+const estimatedTurns = computed(() => {
+  const desc = props.task.description
+  if (!desc) return null
+  const lower = desc.toLowerCase()
+  let score = 0
+
+  // Prompt length
+  if (desc.length > 1000) score += 4
+  else if (desc.length > 500) score += 3
+  else if (desc.length > 200) score += 2
+  else if (desc.length > 80) score += 1
+
+  // Tag (complexity grade)
+  const tag = props.task.tag
+  if (tag === 'feature') score += 3
+  else if (tag === 'refactor') score += 2.5
+  else if (tag === 'update') score += 2
+  else if (tag === 'bug') score += 1.5
+  else if (tag === 'misc') score += 1
+
+  // Keywords
+  const simple = ['fix typo', 'rename', 'update text', 'remove unused', 'add comment', 'fix import']
+  const complex = ['implement', 'create', 'build', 'design', 'refactor', 'migrate', 'rewrite', 'integrate']
+  if (simple.some(k => lower.includes(k))) score -= 1
+  if (complex.some(k => lower.includes(k))) score += 2
+
+  const rounded = Math.round(score)
+  const map: Record<number, number> = { 0: 3, 1: 5, 2: 8, 3: 12, 4: 15, 5: 20, 6: 25 }
+  return rounded <= 0 ? 3 : map[rounded] ?? 30
+})
 </script>
 
 <template>
@@ -35,6 +67,14 @@ const tagInfo = computed(() => {
     </div>
     <div v-if="task.description" class="task-card-bottom">
       <p class="task-prompt">{{ task.description }}</p>
+    </div>
+    <div class="task-card-meta">
+      <span v-if="task.max_turns" class="task-meta-badge" title="Max turns (manual override)">
+        {{ task.max_turns }} turns
+      </span>
+      <span v-else-if="estimatedTurns" class="task-meta-badge task-meta-auto" title="Estimated turns (auto)">
+        ~{{ estimatedTurns }} turns
+      </span>
     </div>
   </div>
 </template>
@@ -71,7 +111,6 @@ const tagInfo = computed(() => {
   font-weight: 700;
   letter-spacing: 0.02em;
   border: 1px solid;
-  text-shadow: 0 0 10px currentColor;
 }
 
 .task-prompt {
@@ -121,6 +160,27 @@ const tagInfo = computed(() => {
   opacity: 1 !important;
   background: rgba(239, 68, 68, 0.1);
   color: #ef4444;
+}
+
+.task-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.task-meta-badge {
+  font-size: 0.625rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--hover-overlay);
+  padding: 1px 6px;
+  border-radius: 100px;
+  letter-spacing: 0.02em;
+}
+
+.task-meta-auto {
+  opacity: 0.7;
 }
 
 </style>

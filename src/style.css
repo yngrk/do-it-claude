@@ -4,70 +4,70 @@
 
 /* --- CSS Variables ----------------------------------------- */
 :root {
-  /* Colors — dark with strong layer separation */
-  --bg-base:      #050507;
-  --bg-surface:   #111114;
-  --bg-terminal:  #08080a;
-  --bg-card:      #1a1a20;
-  --bg-elevated:  #26262e;
-  --bg-hover:     #32323c;
+  /* Flat dark — solid colors, no gradients, high contrast */
+  --bg-base:      #0a0a0f;
+  --bg-surface:   #111118;
+  --bg-terminal:  #08080d;
+  --bg-card:      #16161e;
+  --bg-elevated:  #1e1e28;
+  --bg-hover:     #282834;
 
-  --accent:        #a855f7;
-  --accent-glow:   rgba(168, 85, 247, 0.4);
+  --accent:        #a78bfa;
+  --accent-glow:   transparent;
 
-  --accent-secondary: #3b82f6;
-  --accent-tertiary: #10b981;
+  --accent-secondary: #60a5fa;
+  --accent-tertiary: #34d399;
 
-  --success:  #22c55e;
-  --warning:  #f59e0b;
-  --error:    #fb7185;
-  --danger:   #fb7185;
+  --success:  #4ade80;
+  --warning:  #fbbf24;
+  --error:    #f87171;
+  --danger:   #f87171;
 
-  --text-primary:   #fafafa;
-  --text-secondary: #a8a8b3;
-  --text-muted:     #55555f;
+  --text-primary:   #ffffff;
+  --text-secondary: #a1a1b5;
+  --text-muted:     #6b6b80;
 
-  /* Stronger borders */
-  --border:       rgba(255, 255, 255, 0.1);
-  --border-hover: rgba(255, 255, 255, 0.28);
+  /* Solid borders — no rgba fuzz */
+  --border:       #252530;
+  --border-hover: #3a3a4a;
   --hover-overlay: rgba(255, 255, 255, 0.06);
 
-  /* Bolder badge colors */
-  --badge-backlog-bg:      rgba(168, 85, 247, 0.16);
+  /* Bright, saturated badge colors */
+  --badge-backlog-bg:      #2a1f3d;
   --badge-backlog-color:   #c084fc;
-  --badge-queued-bg:       rgba(59, 130, 246, 0.2);
+  --badge-queued-bg:       #172554;
   --badge-queued-color:    #60a5fa;
-  --badge-in_progress-bg:  rgba(168, 85, 247, 0.25);
+  --badge-in_progress-bg:  #2e1065;
   --badge-in_progress-color: #c084fc;
-  --badge-done-bg:         rgba(16, 185, 129, 0.2);
-  --badge-done-color:      #34d399;
-  --badge-failed-bg:       rgba(251, 113, 133, 0.2);
-  --badge-failed-color:    #fb7185;
+  --badge-done-bg:         #052e16;
+  --badge-done-color:      #4ade80;
+  --badge-failed-bg:       #450a0a;
+  --badge-failed-color:    #f87171;
 
   /* Radius */
   --radius-pill:   100px;
-  --radius-modal:  10px;
+  --radius-modal:  8px;
   --radius-card:   6px;
   --radius-btn:    6px;
   --radius-input:  6px;
   --radius-sm:     4px;
   --radius-xs:     4px;
 
-  /* Heavier shadows with accent tint */
-  --shadow-card:       0 2px 8px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(168, 85, 247, 0.1);
-  --shadow-card-hover: 0 8px 28px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(168, 85, 247, 0.3), 0 0 24px rgba(168, 85, 247, 0.1);
-  --shadow-modal:      0 24px 64px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(168, 85, 247, 0.15);
+  /* Flat shadows — no glow, just depth */
+  --shadow-card:       none;
+  --shadow-card-hover: none;
+  --shadow-modal:      0 16px 48px rgba(0, 0, 0, 0.8);
 
-  /* Gradient */
-  --gradient-accent: linear-gradient(135deg, #a855f7, #6366f1, #3b82f6);
+  /* No gradients */
+  --gradient-accent: #a78bfa;
 
-  /* Glass */
-  --glass-bg:     rgba(255, 255, 255, 0.03);
-  --glass-border: rgba(255, 255, 255, 0.08);
+  /* Glass — solid fallback */
+  --glass-bg:     #16161e;
+  --glass-border: #252530;
 
   /* Transition */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
-  --transition: all 0.2s var(--ease);
+  --transition: all 0.15s var(--ease);
 
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   font-size: 14px;
@@ -80,15 +80,15 @@
 
 /* --- Light Theme ------------------------------------------- */
 :root[data-theme="light"] {
-  /* Stronger layer separation: cool gray base → warm white cards */
-  --bg-base:      #e5e7eb;
-  --bg-surface:   #eef0f4;
+  /* Flat light — solid colors, high contrast */
+  --bg-base:      #f0f1f5;
+  --bg-surface:   #e8e9ee;
   --bg-card:      #ffffff;
-  --bg-elevated:  #d4d6dc;
-  --bg-hover:     #c8cad2;
+  --bg-elevated:  #e0e1e6;
+  --bg-hover:     #d4d5dc;
 
   --accent:        #7c3aed;
-  --accent-glow:   rgba(124, 58, 237, 0.2);
+  --accent-glow:   transparent;
   --accent-secondary: #2563eb;
   --accent-tertiary: #059669;
 
@@ -97,38 +97,38 @@
   --error:    #dc2626;
   --danger:   #dc2626;
 
-  --text-primary:   #09090b;
-  --text-secondary: #3f3f46;
-  --text-muted:     #71717a;
+  --text-primary:   #0a0a0f;
+  --text-secondary: #374151;
+  --text-muted:     #6b7280;
 
-  /* Stronger borders */
-  --border:       rgba(0, 0, 0, 0.15);
-  --border-hover: rgba(0, 0, 0, 0.28);
-  --hover-overlay: rgba(0, 0, 0, 0.06);
+  /* Solid borders */
+  --border:       #d1d5db;
+  --border-hover: #9ca3af;
+  --hover-overlay: rgba(0, 0, 0, 0.04);
 
-  /* Bolder badge colors */
-  --badge-backlog-bg:      rgba(124, 58, 237, 0.1);
-  --badge-backlog-color:   #7c3aed;
-  --badge-queued-bg:       rgba(37, 99, 235, 0.15);
+  /* Bright badge colors on light bg */
+  --badge-backlog-bg:      #ede9fe;
+  --badge-backlog-color:   #6d28d9;
+  --badge-queued-bg:       #dbeafe;
   --badge-queued-color:    #1d4ed8;
-  --badge-in_progress-bg:  rgba(124, 58, 237, 0.15);
-  --badge-in_progress-color: #6d28d9;
-  --badge-done-bg:         rgba(5, 150, 105, 0.15);
-  --badge-done-color:      #047857;
-  --badge-failed-bg:       rgba(220, 38, 38, 0.15);
-  --badge-failed-color:    #b91c1c;
+  --badge-in_progress-bg:  #e9d5ff;
+  --badge-in_progress-color: #7c3aed;
+  --badge-done-bg:         #dcfce7;
+  --badge-done-color:      #15803d;
+  --badge-failed-bg:       #fee2e2;
+  --badge-failed-color:    #dc2626;
 
-  /* Heavier shadows for depth */
-  --shadow-card:       0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0,0,0,0.05);
-  --shadow-card-hover: 0 8px 20px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(124, 58, 237, 0.15);
-  --shadow-modal:      0 24px 64px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(0,0,0,0.08);
+  /* No shadows — flat */
+  --shadow-card:       none;
+  --shadow-card-hover: none;
+  --shadow-modal:      0 16px 48px rgba(0, 0, 0, 0.15);
 
-  --gradient-accent: linear-gradient(135deg, #7c3aed, #4f46e5, #2563eb);
+  --gradient-accent: #7c3aed;
 
-  --bg-terminal:  #e2e4e8;
+  --bg-terminal:  #e4e5ea;
 
-  --glass-bg:     rgba(255, 255, 255, 0.85);
-  --glass-border: rgba(0, 0, 0, 0.1);
+  --glass-bg:     #ffffff;
+  --glass-border: #d1d5db;
 }
 
 /* --- Reset -------------------------------------------------- */
@@ -173,8 +173,8 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 
 /* --- Keyframe Animations ----------------------------------- */
 @keyframes pulse-glow {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--accent-glow); }
-  50%       { opacity: 0.85; box-shadow: 0 0 0 6px transparent; }
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
 }
 
 @keyframes fade-in {
@@ -193,10 +193,7 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 
 /* --- Utility Classes --------------------------------------- */
 .gradient-text {
-  background: var(--gradient-accent);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--accent);
 }
 
 .glass-panel {
@@ -376,7 +373,6 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
   color: var(--text-primary);
   background: rgba(168, 85, 247, 0.1);
   border-color: rgba(168, 85, 247, 0.4);
-  box-shadow: 0 1px 8px rgba(168, 85, 247, 0.2), inset 0 0 12px rgba(168, 85, 247, 0.05);
 }
 
 .tab-active::after {
@@ -387,7 +383,7 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
   right: 6px;
   height: 2px;
   border-radius: 2px;
-  background: linear-gradient(90deg, #a855f7, #6366f1);
+  background: var(--accent);
 }
 
 .tab-label {
@@ -606,8 +602,7 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 }
 
 .kanban-column:hover {
-  border-color: rgba(168, 85, 247, 0.35);
-  box-shadow: 0 0 16px rgba(168, 85, 247, 0.06);
+  border-color: var(--border-hover);
 }
 
 
