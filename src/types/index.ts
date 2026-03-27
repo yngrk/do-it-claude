@@ -59,6 +59,14 @@ export interface TaskMessage {
   created_at: string
 }
 
+export interface ProjectMessage {
+  id: string
+  project_id: string
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+}
+
 export interface NotificationSettings {
   enabled: boolean
   notify_on_task_done: boolean

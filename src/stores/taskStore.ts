@@ -15,6 +15,13 @@ export const useTaskStore = defineStore('task', () => {
   const chatSending = ref<Record<string, boolean>>({})
   const chatErrors = ref<Record<string, string | null>>({})
 
+  listen<{ project_id: string; tasks: Task[] }>('tasks-created', (event) => {
+    const newTasks = event.payload.tasks
+    if (newTasks.length > 0) {
+      tasks.value = [...tasks.value, ...newTasks]
+    }
+  })
+
   listen<{ task_id: string }>('task-started', (event) => {
     const taskId = event.payload.task_id
     const idx = tasks.value.findIndex(t => t.id === taskId)

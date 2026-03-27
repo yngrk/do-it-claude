@@ -1,8 +1,9 @@
 use tauri::{AppHandle, Emitter, Manager, State};
-use crate::db::{self, DbConn, Project, Task, TaskLog, TaskMessage, PromptTemplate};
+use crate::db::{self, DbConn, Project, Task, TaskLog, TaskMessage, ProjectMessage, PromptTemplate};
 use crate::executor::{self, RunningProcesses, StopFlags, SessionStore, ActiveQueues};
 use crate::pty::{self, PtySessions};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use base64::Engine as _;
 
 #[tauri::command]
 pub fn create_project(db: State<DbConn>, name: String, path: String) -> Result<Project, String> {
@@ -405,6 +406,355 @@ pub async fn send_task_message(
         project_id: project.id.clone(),
         project_name: project.name.clone(),
         task_title: task.title.clone(),
+        message: assistant_message.clone(),
+    });
+
+    Ok(assistant_message)
+}
+
+// --- Project Chat (Idea Chat) ---
+
+#[derive(Clone, serde::Serialize)]
+pub struct TasksCreatedPayload {
+    project_id: String,
+    tasks: Vec<Task>,
+}
+
+fn parse_and_create_tasks(conn: &rusqlite::Connection, project_id: &str, content: &str) -> Vec<Task> {
+    let mut created = Vec::new();
+    // Find all <tasks>...</tasks> blocks
+    let mut search_from = 0;
+    while let Some(start) = content[search_from..].find("<tasks>") {
+        let abs_start = search_from + start + "<tasks>".len();
+        if let Some(end) = content[abs_start..].find("</tasks>") {
+            let abs_end = abs_start + end;
+            let json_str = content[abs_start..abs_end].trim();
+            if let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(json_str) {
+                for item in items {
+                    let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("").trim();
+                    let description = item.get("description").and_then(|v| v.as_str()).unwrap_or("").trim();
+                    let tag = item.get("tag").and_then(|v| v.as_str());
+                    if !title.is_empty() {
+                        if let Ok(task) = db::create_task(conn, project_id, title, description, tag) {
+                            created.push(task);
+                        }
+                    }
+                }
+            }
+            search_from = abs_end + "</tasks>".len();
+        } else {
+            break;
+        }
+    }
+    created
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct ProjectChatStartedPayload {
+    project_id: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct ProjectChatChunkPayload {
+    project_id: String,
+    content: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct ProjectChatCompletedPayload {
+    project_id: String,
+    message: ProjectMessage,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct ProjectChatFailedPayload {
+    project_id: String,
+    error: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ChatAttachment {
+    pub data: String,       // base64
+    pub media_type: String, // e.g. "image/png", "application/pdf"
+    pub name: String,       // original filename
+}
+
+#[tauri::command]
+pub fn get_project_messages(db: State<DbConn>, project_id: String) -> Result<Vec<ProjectMessage>, String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    db::get_project_messages(&conn, &project_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn clear_project_chat(db: State<DbConn>, sessions: State<SessionStore>, project_id: String) -> Result<(), String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    db::clear_project_messages(&conn, &project_id).map_err(|e| e.to_string())?;
+    // Clear the session so next message starts fresh
+    let mut store = sessions.lock().map_err(|e| e.to_string())?;
+    store.remove(&format!("project-chat-{}", project_id));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn send_project_message(
+    app: AppHandle,
+    db: State<'_, DbConn>,
+    sessions: State<'_, SessionStore>,
+    _processes: State<'_, RunningProcesses>,
+    project_id: String,
+    content: String,
+    attachments: Option<Vec<ChatAttachment>>,
+) -> Result<ProjectMessage, String> {
+    let content = content.trim().to_string();
+    if content.is_empty() {
+        return Err("Message cannot be empty".to_string());
+    }
+
+    let db_conn = db.inner().clone();
+    let project = {
+        let conn = db_conn.lock().map_err(|e| e.to_string())?;
+        db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
+            .ok_or_else(|| "Project not found".to_string())?
+    };
+
+    // Save user message
+    let _user_message = {
+        let conn = db_conn.lock().map_err(|e| e.to_string())?;
+        db::add_project_message(&conn, &project_id, "user", &content).map_err(|e| e.to_string())?
+    };
+
+    let _ = app.emit("project-chat-started", ProjectChatStartedPayload {
+        project_id: project_id.clone(),
+    });
+
+    let session_key = format!("project-chat-{}", project_id);
+    let existing_session = {
+        let store = sessions.inner().lock().map_err(|e| e.to_string())?;
+        store.get(&session_key).cloned()
+    };
+
+    let claude_bin = executor::resolve_claude_path();
+    let shell_path = executor::get_shell_path();
+
+    // Write attachments to temp files and build modified prompt
+    let mut temp_file_paths: Vec<std::path::PathBuf> = Vec::new();
+    let prompt_for_claude = if let Some(ref files) = attachments {
+        if !files.is_empty() {
+            let mut image_paths = Vec::new();
+            let mut doc_paths = Vec::new();
+            for file in files {
+                let ext = match file.media_type.as_str() {
+                    "image/png" => "png",
+                    "image/gif" => "gif",
+                    "image/webp" => "webp",
+                    "image/jpeg" | "image/jpg" => "jpg",
+                    "application/pdf" => "pdf",
+                    "text/plain" => "txt",
+                    "text/markdown" => "md",
+                    "text/csv" => "csv",
+                    "application/json" => "json",
+                    _ => {
+                        // Try to get extension from filename
+                        file.name.rsplit('.').next().unwrap_or("bin")
+                    }
+                };
+                let filename = format!("{}.{}", uuid::Uuid::new_v4(), ext);
+                let path = std::env::temp_dir().join(filename);
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(&file.data)
+                    .map_err(|e| e.to_string())?;
+                std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+                if file.media_type.starts_with("image/") {
+                    image_paths.push(path.to_string_lossy().into_owned());
+                } else {
+                    doc_paths.push(format!("{} ({})", path.to_string_lossy(), file.name));
+                }
+                temp_file_paths.push(path);
+            }
+            let mut parts = Vec::new();
+            if !image_paths.is_empty() {
+                parts.push(format!("[The user attached images. Read these files to see them: {}]", image_paths.join(", ")));
+            }
+            if !doc_paths.is_empty() {
+                parts.push(format!("[The user attached documents. Read these files: {}]", doc_paths.join(", ")));
+            }
+            parts.push(content.clone());
+            parts.join("\n\n")
+        } else {
+            content.clone()
+        }
+    } else {
+        content.clone()
+    };
+
+    let mut cmd = tokio::process::Command::new(&claude_bin);
+    cmd.arg("-p")
+        .arg(&prompt_for_claude)
+        .arg("--dangerously-skip-permissions")
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--verbose");
+
+    if let Some(ref sid) = existing_session {
+        cmd.arg("--resume").arg(sid);
+    }
+
+    // Add system prompt for plan mode
+    let mut context_parts: Vec<String> = Vec::new();
+    context_parts.push(r#"You are a planning assistant for a coding task queue. Your job is to help the user plan work and break it into executable tasks.
+
+## How to work
+1. When the user describes what they want, ask clarifying questions if needed
+2. Analyze the codebase context to understand the current state
+3. Break the work into concrete, independently executable tasks
+4. Output the tasks in a structured block so they get auto-created in the queue
+
+## Creating tasks
+When you have a clear plan, output tasks inside a <tasks> XML tag as a JSON array. Each task needs:
+- "title": Short imperative title (e.g. "Add user auth middleware")
+- "description": The full prompt that will be sent to Claude Code for execution. Be specific — include file paths, function names, and expected behavior. This is the actual instruction Claude Code will execute.
+- "tag": One of "bug", "feature", "update", "refactor", "docs", "misc"
+
+Example:
+<tasks>
+[
+  {"title": "Add input validation to signup form", "description": "In src/components/SignupForm.vue, add validation for the email and password fields. Email must be a valid format. Password must be at least 8 characters with one number. Show inline error messages below each field.", "tag": "feature"},
+  {"title": "Write tests for signup validation", "description": "Create tests in src/components/__tests__/SignupForm.test.ts for the signup form validation. Test valid and invalid email formats, password length requirements, and that error messages appear correctly.", "tag": "feature"}
+]
+</tasks>
+
+Tasks are created in the queue immediately when you output this block. You can output tasks at any point in the conversation — if the user refines requirements, output a new <tasks> block with additional tasks.
+
+Keep your planning responses concise. Focus on understanding requirements and producing good task definitions."#.to_string());
+    if let Some(ref prompt) = project.system_prompt {
+        if !prompt.trim().is_empty() {
+            context_parts.push(prompt.clone());
+        }
+    }
+    if let Some(ref ctx) = project.project_context {
+        if !ctx.trim().is_empty() {
+            context_parts.push(ctx.clone());
+        }
+    }
+    cmd.arg("--append-system-prompt").arg(context_parts.join("\n\n"));
+
+    cmd.current_dir(&project.path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    if let Some(ref path) = shell_path {
+        cmd.env("PATH", path);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let stdout = child.stdout.take().ok_or_else(|| "Failed to capture stdout".to_string())?;
+    let stderr = child.stderr.take().ok_or_else(|| "Failed to capture stderr".to_string())?;
+
+    let app_stdout = app.clone();
+    let sessions_stdout = sessions.inner().clone();
+    let project_id_stdout = project_id.clone();
+    let session_key_clone = session_key.clone();
+    let stdout_handle = tokio::spawn(async move {
+        let mut full_response = String::new();
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+                match json.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+                    "system" => {
+                        if let Some(sid) = json.get("session_id").and_then(|v| v.as_str()) {
+                            let mut store = sessions_stdout.lock().unwrap();
+                            store.insert(session_key_clone.clone(), sid.to_string());
+                        }
+                    }
+                    "assistant" => {
+                        for chunk in extract_assistant_text(&json) {
+                            full_response.push_str(&chunk);
+                            let _ = app_stdout.emit("project-chat-chunk", ProjectChatChunkPayload {
+                                project_id: project_id_stdout.clone(),
+                                content: chunk,
+                            });
+                        }
+                    }
+                    "result" => {
+                        if full_response.is_empty() {
+                            if let Some(result_text) = json.get("result").and_then(|v| v.as_str()) {
+                                full_response.push_str(result_text);
+                                let _ = app_stdout.emit("project-chat-chunk", ProjectChatChunkPayload {
+                                    project_id: project_id_stdout.clone(),
+                                    content: result_text.to_string(),
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        full_response
+    });
+
+    let stderr_handle = tokio::spawn(async move {
+        let reader = BufReader::new(stderr);
+        let mut lines = reader.lines();
+        let mut output = Vec::new();
+        while let Ok(Some(line)) = lines.next_line().await {
+            output.push(line);
+        }
+        output
+    });
+
+    let status = child.wait().await.map_err(|e| e.to_string())?;
+    let assistant_content = stdout_handle.await.map_err(|e| e.to_string())?;
+    let stderr_output = stderr_handle.await.map_err(|e| e.to_string())?;
+
+    // Clean up temp image files
+    for path in &temp_file_paths {
+        let _ = std::fs::remove_file(path);
+    }
+
+    if !status.success() {
+        let error = stderr_output.join("\n").trim().to_string();
+        let error = if error.is_empty() { "Claude chat failed".to_string() } else { error };
+        let _ = app.emit("project-chat-failed", ProjectChatFailedPayload {
+            project_id,
+            error: error.clone(),
+        });
+        return Err(error);
+    }
+
+    let final_content = assistant_content.trim().to_string();
+    if final_content.is_empty() {
+        let error = "Claude returned an empty response".to_string();
+        let _ = app.emit("project-chat-failed", ProjectChatFailedPayload {
+            project_id,
+            error: error.clone(),
+        });
+        return Err(error);
+    }
+
+    let assistant_message = {
+        let conn = db_conn.lock().map_err(|e| e.to_string())?;
+        db::add_project_message(&conn, &project_id, "assistant", &final_content).map_err(|e| e.to_string())?
+    };
+
+    // Parse <tasks> blocks and auto-create tasks in the queue
+    let created_tasks = {
+        let conn = db_conn.lock().map_err(|e| e.to_string())?;
+        parse_and_create_tasks(&conn, &project_id, &final_content)
+    };
+
+    if !created_tasks.is_empty() {
+        let _ = app.emit("tasks-created", TasksCreatedPayload {
+            project_id: project_id.clone(),
+            tasks: created_tasks,
+        });
+    }
+
+    let _ = app.emit("project-chat-completed", ProjectChatCompletedPayload {
+        project_id: project_id.clone(),
         message: assistant_message.clone(),
     });
 

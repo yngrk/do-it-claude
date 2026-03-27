@@ -102,7 +102,6 @@ onBeforeUnmount(() => {
 .column-backlog { border-top-color: #a855f7; }
 .column-queued { border-top-color: #3b82f6; }
 
-
 .column-backlog .column-title { color: #c084fc; }
 .column-queued .column-title { color: #60a5fa; }
 

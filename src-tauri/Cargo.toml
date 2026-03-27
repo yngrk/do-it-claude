@@ -25,3 +25,4 @@ uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["process", "rt-multi-thread", "sync", "io-util"] }
 chrono = { version = "0.4", features = ["serde"] }
 portable-pty = "0.8"
+base64 = "0.22"

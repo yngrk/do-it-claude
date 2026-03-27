@@ -4,7 +4,7 @@
 
 **Do It Claude** is a desktop app that turns the Claude Code CLI into an automated task execution pipeline. It provides a visual Kanban board where users organize coding tasks, queue them up, and let Claude Code execute them one by one — unattended.
 
-Users load a backlog of tasks, drag them into a queue, and walk away. The app handles execution, captures all output, tracks success/failure, and moves to the next task automatically.
+Users brainstorm ideas in a project-level chat with Claude, create tasks from those ideas, and let them execute automatically. The app handles execution, captures all output, tracks success/failure, and moves to the next task automatically.
 
 ## Problem
 
@@ -17,7 +17,8 @@ Developers who use Claude Code regularly and want to batch tasks, run them overn
 ## How It Works
 
 - **Projects** point at a local code folder
-- **Tasks** are prompts sent to Claude Code, organized on a Kanban board: Backlog → Queued → In Progress → Done
+- **Idea Chat** is a project-level chat with Claude for brainstorming and planning before creating tasks
+- **Tasks** are prompts sent to Claude Code, organized in columns: Tasks (queued) → In Progress → Done
 - Execution engine picks up the first queued task, runs `claude` in the project directory, captures output, moves to Done, starts the next
 - Each project has its own independent queue; multiple projects can run in parallel
 

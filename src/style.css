@@ -624,7 +624,7 @@ h4 { font-size: 0.875rem;  font-weight: 600; color: var(--text-secondary); }
 
 .column-title {
   font-weight: 600;
-  font-size: 0.8125rem;
+  font-size: 0.6875rem;
   color: var(--text-primary);
   text-transform: uppercase;
   letter-spacing: 0.06em;

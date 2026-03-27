@@ -432,7 +432,7 @@ watch(
             v-if="task.status === 'done' || task.status === 'failed'"
             class="btn btn-secondary btn-sm"
             @click="emit('move-to-backlog', task.id)"
-          >Move to Backlog</button>
+          >Move to Queue</button>
           <button
             v-if="task.status === 'failed'"
             class="btn btn-secondary btn-sm"

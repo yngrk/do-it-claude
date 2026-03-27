@@ -10,6 +10,7 @@ import KanbanColumn from '../components/KanbanColumn.vue'
 import TaskCard from '../components/TaskCard.vue'
 import TaskDetail from '../components/TaskDetail.vue'
 import AddTaskDialog from '../components/AddTaskDialog.vue'
+import IdeaChat from '../components/IdeaChat.vue'
 import type { Task } from '../types'
 import { formatTimestamp } from '../utils/dateFormat'
 
@@ -130,11 +131,8 @@ listen<{ project_id: string }>('queue-stopped', (event) => {
 
 watch(projectId, loadProject)
 
-const backlogTasks = computed(() =>
-  taskStore.tasks.filter(t => t.status === 'backlog').sort((a, b) => a.sort_order - b.sort_order)
-)
 const queuedTasks = computed(() =>
-  taskStore.tasks.filter(t => t.status === 'queued').sort((a, b) => a.sort_order - b.sort_order)
+  taskStore.tasks.filter(t => t.status === 'queued' || t.status === 'backlog').sort((a, b) => a.sort_order - b.sort_order)
 )
 const runningTask = computed(() =>
   taskStore.tasks.find(t => t.status === 'in_progress') ?? null
@@ -246,7 +244,7 @@ async function retryTask(taskId: string) {
 }
 
 async function moveToBacklog(taskId: string) {
-  await handleTaskMoved(taskId, 'backlog', 0)
+  await handleTaskMoved(taskId, 'queued', 0)
 }
 
 watch(
@@ -436,17 +434,14 @@ function onDividerMouseDown(e: MouseEvent) {
         <!-- Task Board (bottom) — 3 columns -->
         <div class="task-board">
           <div class="board-columns">
-            <KanbanColumn title="Backlog" status="backlog" :tasks="backlogTasks" :allow-drag="true" :deletable="true" @task-moved="handleTaskMoved" @open-detail="openDetail" @delete-task="handleDeleteTask">
+            <IdeaChat :project-id="projectId" />
+            <KanbanColumn title="Queue" status="queued" :tasks="queuedTasks" :allow-drag="true" :deletable="true" @task-moved="handleTaskMoved" @open-detail="openDetail" @delete-task="handleDeleteTask">
               <template #actions>
                 <button class="col-btn" @click="showAddDialog = true" title="Add task">
                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                     <path d="M6 1.5V10.5M1.5 6H10.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                   </svg>
                 </button>
-              </template>
-            </KanbanColumn>
-            <KanbanColumn title="Queued" status="queued" :tasks="queuedTasks" :allow-drag="true" @task-moved="handleTaskMoved" @open-detail="openDetail">
-              <template #actions>
                 <button class="col-btn" :class="queueRunning ? 'col-btn-stop' : 'col-btn-start'" @click="toggleQueue" :title="queueRunning ? 'Stop queue' : 'Start queue'">
                   <svg v-if="!queueRunning" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 2L10 6L3 10V2Z" fill="currentColor"/></svg>
                   <svg v-else width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="currentColor"/></svg>
@@ -457,7 +452,7 @@ function onDividerMouseDown(e: MouseEvent) {
             <div class="kanban-column column-history">
               <div class="column-header">
                 <div class="column-header-left">
-                  <span class="column-title">DONE / FAILED</span>
+                  <span class="column-title">History</span>
                   <span class="column-count">{{ historyCount }}</span>
                 </div>
               </div>
@@ -473,7 +468,7 @@ function onDividerMouseDown(e: MouseEvent) {
                   <span class="history-row-name">{{ task.title }}</span>
                   <div v-if="task.status === 'failed'" class="history-row-actions">
                     <button class="history-action-btn" @click.stop="retryTask(task.id)">Retry</button>
-                    <button class="history-action-btn" @click.stop="moveToBacklog(task.id)">Backlog</button>
+                    <button class="history-action-btn" @click.stop="moveToBacklog(task.id)">Queue</button>
                   </div>
                   <span class="history-row-time">{{ formatTimestamp(task.completed_at) }}</span>
                 </div>
@@ -628,8 +623,9 @@ function onDividerMouseDown(e: MouseEvent) {
 
 /* Task board */
 .task-board { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.board-columns { display: grid; grid-template-columns: 1.2fr 1fr 0.9fr; flex: 1; min-height: 0; }
+.board-columns { display: grid; grid-template-columns: 1.2fr 1fr 0.9fr; flex: 1; min-height: 0; overflow: hidden; }
 .board-columns > :deep(.kanban-column),
+.board-columns > :deep(.idea-chat),
 .board-columns > .column-history { background: transparent; border: none; border-radius: 0; border-right: 1px solid var(--border); border-top: none; }
 .board-columns > :deep(.kanban-column):hover { box-shadow: none; }
 .board-columns > :deep(.kanban-column:last-child),

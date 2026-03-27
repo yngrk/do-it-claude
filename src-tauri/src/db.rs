@@ -195,6 +195,15 @@ pub struct PromptTemplate {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectMessage {
+    pub id: String,
+    pub project_id: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+}
+
 pub type DbConn = Arc<Mutex<Connection>>;
 
 const TASK_SELECT_COLUMNS: &str =
@@ -307,6 +316,18 @@ pub fn init_db(app_dir: &std::path::Path) -> Result<Connection> {
     // Migration: add max_turns to tasks
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN max_turns INTEGER", []);
 
+    // Migration: create project_messages table
+    let _ = conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS project_messages (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+    ");
+
     // Seed default mode if not present
     let has_default: bool = conn.query_row(
         "SELECT COUNT(*) FROM prompt_templates",
@@ -412,7 +433,7 @@ pub fn create_task(conn: &Connection, project_id: &str, title: &str, description
         title: title.to_string(),
         description: description.to_string(),
         tag: tag.map(|t| t.to_string()),
-        status: "backlog".to_string(),
+        status: "queued".to_string(),
         sort_order: max_order + 1,
         exit_code: None,
         max_turns: None,
@@ -577,6 +598,42 @@ pub fn get_task_messages(conn: &Connection, task_id: &str) -> Result<Vec<TaskMes
         })
     })?.collect::<Result<Vec<_>>>()?;
     Ok(messages)
+}
+
+pub fn add_project_message(conn: &Connection, project_id: &str, role: &str, content: &str) -> Result<ProjectMessage> {
+    let message = ProjectMessage {
+        id: Uuid::new_v4().to_string(),
+        project_id: project_id.to_string(),
+        role: role.to_string(),
+        content: content.to_string(),
+        created_at: Utc::now().to_rfc3339(),
+    };
+    conn.execute(
+        "INSERT INTO project_messages (id, project_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![message.id, message.project_id, message.role, message.content, message.created_at],
+    )?;
+    Ok(message)
+}
+
+pub fn get_project_messages(conn: &Connection, project_id: &str) -> Result<Vec<ProjectMessage>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, role, content, created_at FROM project_messages WHERE project_id = ?1 ORDER BY created_at ASC"
+    )?;
+    let messages = stmt.query_map(params![project_id], |row| {
+        Ok(ProjectMessage {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            role: row.get(2)?,
+            content: row.get(3)?,
+            created_at: row.get(4)?,
+        })
+    })?.collect::<Result<Vec<_>>>()?;
+    Ok(messages)
+}
+
+pub fn clear_project_messages(conn: &Connection, project_id: &str) -> Result<()> {
+    conn.execute("DELETE FROM project_messages WHERE project_id = ?1", params![project_id])?;
+    Ok(())
 }
 
 pub fn get_templates(conn: &Connection) -> Result<Vec<PromptTemplate>> {
