@@ -9,26 +9,13 @@ const projectStore = useProjectStore()
 
 const promptText = ref('')
 const saving = ref(false)
-const contextText = ref('')
-const generating = ref(false)
 
 watch(() => props.visible, (val) => {
   if (val) {
     const project = projectStore.projects.find(p => p.id === props.projectId)
     promptText.value = project?.system_prompt ?? ''
-    contextText.value = project?.project_context ?? ''
   }
 })
-
-async function generateContext() {
-  generating.value = true
-  try {
-    const context = await projectStore.generateContext(props.projectId)
-    contextText.value = context
-  } finally {
-    generating.value = false
-  }
-}
 
 async function save() {
   saving.value = true
@@ -60,21 +47,8 @@ function close() {
 
       <div class="modal-body ps-body">
         <div class="ps-section">
-          <div class="ps-section-header">
-            <div>
-              <div class="ps-section-label">Project Context</div>
-              <div class="ps-section-sub">Auto-generated project structure map injected into every task. Keeps Claude oriented with minimal tokens.</div>
-            </div>
-            <button class="btn btn-secondary btn-sm" :disabled="generating" @click="generateContext">
-              {{ generating ? 'Scanning...' : contextText ? 'Refresh' : 'Generate' }}
-            </button>
-          </div>
-          <pre v-if="contextText" class="ps-context-display">{{ contextText }}</pre>
-          <div v-else class="ps-context-empty">No context generated yet. Click Generate to scan the project.</div>
-        </div>
-        <div class="ps-section">
           <div class="ps-section-label">Additional Instructions</div>
-          <div class="ps-section-sub">Extra instructions appended after the selected mode for all tasks in this project.</div>
+          <div class="ps-section-sub">Extra instructions appended to every task in this project. Claude Code already reads your project's CLAUDE.md and explores the repo on its own.</div>
           <textarea
             v-model="promptText"
             class="ps-prompt-textarea"
@@ -147,44 +121,5 @@ function close() {
 
 .ps-prompt-textarea::placeholder {
   color: var(--text-secondary);
-}
-
-.ps-section-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.btn-sm {
-  padding: 4px 12px;
-  font-size: 0.75rem;
-  white-space: nowrap;
-}
-
-.ps-context-display {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hover);
-  border-radius: var(--radius-xs);
-  padding: 12px 14px;
-  color: var(--text-secondary);
-  font-size: 0.75rem;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 300px;
-  overflow-y: auto;
-  margin: 0;
-}
-
-.ps-context-empty {
-  background: var(--bg-surface);
-  border: 1px dashed var(--border-hover);
-  border-radius: var(--radius-xs);
-  padding: 20px;
-  color: var(--text-muted);
-  font-size: 0.8125rem;
-  text-align: center;
 }
 </style>

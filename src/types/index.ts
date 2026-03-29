@@ -1,10 +1,11 @@
+export type CliProvider = 'claude' | 'codex'
+
 export interface Project {
   id: string
   name: string
   path: string
   system_prompt: string | null
   mode_id: string | null
-  project_context: string | null
   created_at: string
 }
 
@@ -29,6 +30,11 @@ export interface Task {
   sort_order: number
   exit_code: number | null
   max_turns: number | null
+  model: string | null
+  max_tokens: number | null
+  input_tokens: number | null
+  output_tokens: number | null
+  provider: string | null
   created_at: string
   started_at: string | null
   completed_at: string | null
@@ -37,7 +43,6 @@ export interface Task {
 
 export interface TokenEstimate {
   prompt_tokens: number
-  context_tokens: number
   system_tokens: number
   total_tokens: number
 }
@@ -81,6 +86,15 @@ export interface PromptTemplate {
   content: string
   created_at: string
   updated_at: string
+}
+
+export interface ProviderUsageStats {
+  provider: string
+  total_tasks: number
+  completed_tasks: number
+  failed_tasks: number
+  total_input_tokens: number
+  total_output_tokens: number
 }
 
 export interface ModeFile {

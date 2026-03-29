@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { isPermissionGranted } from '@tauri-apps/plugin-notification'
+import type { ProviderUsageStats } from '../types'
 import { useTheme } from '../composables/useTheme'
 import { useNotificationSettings } from '../composables/useNotificationSettings'
 import { requestNotificationAccess, sendTestNotification } from '../services/notifications'
@@ -19,7 +20,13 @@ interface ClaudeStatus {
 
 const claude = ref<ClaudeStatus | null>(null)
 const checking = ref(false)
+const codex = ref<ClaudeStatus | null>(null)
+const checkingCodex = ref(false)
+const provider = ref<'claude' | 'codex'>('claude')
 const notificationPermission = ref<'granted' | 'denied' | 'default'>('default')
+
+const usageStats = ref<ProviderUsageStats[]>([])
+const loadingStats = ref(false)
 
 const configurations = ref<string[]>([])
 const loadingConfig = ref(false)
@@ -34,6 +41,64 @@ async function checkClaude() {
     checking.value = false
   }
 }
+
+async function checkCodex() {
+  checkingCodex.value = true
+  try {
+    codex.value = await invoke<ClaudeStatus>('check_codex')
+  } catch {
+    codex.value = { found: false, path: '', version: '' }
+  } finally {
+    checkingCodex.value = false
+  }
+}
+
+async function loadProvider() {
+  try {
+    const saved = await invoke<string | null>('get_setting', { key: 'cli_provider' })
+    if (saved === 'codex') provider.value = 'codex'
+  } catch {}
+}
+
+async function setProvider(p: 'claude' | 'codex') {
+  provider.value = p
+  await invoke('set_setting', { key: 'cli_provider', value: p })
+}
+
+async function loadUsageStats() {
+  loadingStats.value = true
+  try {
+    usageStats.value = await invoke<ProviderUsageStats[]>('get_usage_stats')
+  } catch {
+    usageStats.value = []
+  } finally {
+    loadingStats.value = false
+  }
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
+  return n.toString()
+}
+
+const totalStats = computed(() => {
+  const total = {
+    tasks: 0,
+    completed: 0,
+    failed: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+  }
+  for (const s of usageStats.value) {
+    total.tasks += s.total_tasks
+    total.completed += s.completed_tasks
+    total.failed += s.failed_tasks
+    total.input_tokens += s.total_input_tokens
+    total.output_tokens += s.total_output_tokens
+  }
+  return total
+})
 
 async function loadConfigurations() {
   loadingConfig.value = true
@@ -76,7 +141,10 @@ function updateChecked<K extends keyof typeof settings.value>(key: K, checked: b
 
 onMounted(() => {
   checkClaude()
+  checkCodex()
+  loadProvider()
   loadConfigurations()
+  loadUsageStats()
   refreshNotificationPermission()
 })
 
@@ -101,8 +169,17 @@ function goBack() {
       <!-- Left column: compact panels -->
       <div class="settings-col">
         <section class="glass-panel settings-section">
-          <h2 class="settings-section-title">Claude CLI</h2>
-          <div class="claude-check">
+          <h2 class="settings-section-title">CLI Provider</h2>
+          <div class="settings-row">
+            <span class="settings-label">Provider</span>
+            <div class="theme-toggle">
+              <span class="theme-option" :class="{ 'theme-active': provider === 'claude' }" @click="setProvider('claude')">Claude</span>
+              <span class="theme-option" :class="{ 'theme-active': provider === 'codex' }" @click="setProvider('codex')">Codex</span>
+            </div>
+          </div>
+
+          <!-- Claude detection -->
+          <div v-if="provider === 'claude'" class="claude-check">
             <div class="check-status">
               <span v-if="checking" class="check-dot check-loading"></span>
               <span v-else-if="claude?.found" class="check-dot check-ok"></span>
@@ -124,6 +201,32 @@ function goBack() {
             </template>
             <p v-else-if="claude && !claude.found" class="check-help">
               Install Claude Code and ensure <code>claude</code> is in your PATH.
+            </p>
+          </div>
+
+          <!-- Codex detection -->
+          <div v-else class="claude-check">
+            <div class="check-status">
+              <span v-if="checkingCodex" class="check-dot check-loading"></span>
+              <span v-else-if="codex?.found" class="check-dot check-ok"></span>
+              <span v-else class="check-dot check-fail"></span>
+              <span v-if="checkingCodex" class="check-text">Checking...</span>
+              <span v-else-if="codex?.found" class="check-text check-text-ok">Found</span>
+              <span v-else class="check-text check-text-fail">Not found</span>
+              <button class="recheck-btn" @click="checkCodex" :disabled="checkingCodex">Recheck</button>
+            </div>
+            <template v-if="codex?.found">
+              <div class="check-detail">
+                <span class="check-label">Path</span>
+                <code class="check-value">{{ codex.path }}</code>
+              </div>
+              <div class="check-detail">
+                <span class="check-label">Version</span>
+                <code class="check-value">{{ codex.version }}</code>
+              </div>
+            </template>
+            <p v-else-if="codex && !codex.found" class="check-help">
+              Install Codex CLI and ensure <code>codex</code> is in your PATH.
             </p>
           </div>
         </section>
@@ -155,6 +258,69 @@ function goBack() {
 
       <!-- Right column: larger panels -->
       <div class="settings-col">
+        <section class="glass-panel settings-section">
+          <h2 class="settings-section-title">
+            Usage Statistics
+            <button class="recheck-btn" @click="loadUsageStats" :disabled="loadingStats" style="float: right;">Refresh</button>
+          </h2>
+
+          <div v-if="loadingStats" class="config-empty">Loading...</div>
+          <div v-else-if="usageStats.length === 0" class="config-empty">No usage data yet. Run some tasks to see statistics.</div>
+          <div v-else class="usage-stats">
+            <!-- Per-provider stats -->
+            <div v-for="stat in usageStats" :key="stat.provider" class="usage-provider">
+              <div class="usage-provider-header">
+                <span class="usage-provider-name">{{ stat.provider === 'claude' ? 'Claude' : 'Codex' }}</span>
+                <span class="usage-provider-tasks">{{ stat.total_tasks }} tasks</span>
+              </div>
+              <div class="usage-grid">
+                <div class="usage-metric">
+                  <span class="usage-metric-value usage-metric-ok">{{ stat.completed_tasks }}</span>
+                  <span class="usage-metric-label">Completed</span>
+                </div>
+                <div class="usage-metric">
+                  <span class="usage-metric-value usage-metric-fail">{{ stat.failed_tasks }}</span>
+                  <span class="usage-metric-label">Failed</span>
+                </div>
+                <div class="usage-metric">
+                  <span class="usage-metric-value">{{ formatTokens(stat.total_input_tokens) }}</span>
+                  <span class="usage-metric-label">Input tokens</span>
+                </div>
+                <div class="usage-metric">
+                  <span class="usage-metric-value">{{ formatTokens(stat.total_output_tokens) }}</span>
+                  <span class="usage-metric-label">Output tokens</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Totals -->
+            <div v-if="usageStats.length > 1" class="usage-provider usage-totals">
+              <div class="usage-provider-header">
+                <span class="usage-provider-name">Total</span>
+                <span class="usage-provider-tasks">{{ totalStats.tasks }} tasks</span>
+              </div>
+              <div class="usage-grid">
+                <div class="usage-metric">
+                  <span class="usage-metric-value usage-metric-ok">{{ totalStats.completed }}</span>
+                  <span class="usage-metric-label">Completed</span>
+                </div>
+                <div class="usage-metric">
+                  <span class="usage-metric-value usage-metric-fail">{{ totalStats.failed }}</span>
+                  <span class="usage-metric-label">Failed</span>
+                </div>
+                <div class="usage-metric">
+                  <span class="usage-metric-value">{{ formatTokens(totalStats.input_tokens) }}</span>
+                  <span class="usage-metric-label">Input tokens</span>
+                </div>
+                <div class="usage-metric">
+                  <span class="usage-metric-value">{{ formatTokens(totalStats.output_tokens) }}</span>
+                  <span class="usage-metric-label">Output tokens</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="glass-panel settings-section">
           <h2 class="settings-section-title">Notifications</h2>
 
@@ -532,5 +698,76 @@ function goBack() {
 .refresh-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* Usage Statistics */
+.usage-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.usage-provider {
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+}
+
+.usage-totals {
+  border-color: var(--accent);
+  background: rgba(168, 85, 247, 0.05);
+}
+
+.usage-provider-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.usage-provider-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.usage-provider-tasks {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.usage-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+.usage-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.usage-metric-value {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.usage-metric-ok {
+  color: var(--success);
+}
+
+.usage-metric-fail {
+  color: var(--error);
+}
+
+.usage-metric-label {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  text-align: center;
 }
 </style>

@@ -42,6 +42,41 @@ pub fn resolve_claude_path() -> String {
     "claude".to_string()
 }
 
+pub fn resolve_codex_path() -> String {
+    let candidates = [
+        "/opt/homebrew/bin/codex",
+        "/usr/local/bin/codex",
+        "/usr/bin/codex",
+    ];
+    for path in &candidates {
+        if std::path::Path::new(path).exists() {
+            return path.to_string();
+        }
+    }
+    if let Ok(output) = std::process::Command::new("/bin/zsh")
+        .args(["-ilc", "echo $PATH"])
+        .output()
+    {
+        if let Ok(shell_path) = String::from_utf8(output.stdout) {
+            let shell_path = shell_path.trim();
+            for dir in shell_path.split(':') {
+                let candidate = format!("{}/codex", dir);
+                if std::path::Path::new(&candidate).exists() {
+                    return candidate;
+                }
+            }
+        }
+    }
+    "codex".to_string()
+}
+
+pub fn resolve_cli_path(provider: &str) -> String {
+    match provider {
+        "codex" => resolve_codex_path(),
+        _ => resolve_claude_path(),
+    }
+}
+
 /// Get the user's shell PATH for child processes
 pub fn get_shell_path() -> Option<String> {
     std::process::Command::new("/bin/zsh")
@@ -126,24 +161,12 @@ pub async fn start_queue(
     sessions: SessionStore,
     active_queues: ActiveQueues,
     project_id: String,
+    provider: String,
 ) {
     // Clear stop flag on start
     {
         let mut flags = stop_flags.lock().unwrap();
         flags.remove(&project_id);
-    }
-
-    // Auto-refresh project context before starting
-    {
-        let project = {
-            let conn = db.lock().unwrap();
-            db::get_project_by_id(&conn, &project_id).ok().flatten()
-        };
-        if let Some(ref p) = project {
-            let context = crate::context_generator::generate_context(std::path::Path::new(&p.path));
-            let conn = db.lock().unwrap();
-            let _ = db::update_project_context(&conn, &project_id, &context);
-        }
     }
 
     // active flag was already set by try_mark_active in the command handler
@@ -170,6 +193,7 @@ pub async fn start_queue(
         {
             let conn = db.lock().unwrap();
             let _ = db::set_task_in_progress(&conn, &task.id);
+            let _ = db::set_task_provider(&conn, &task.id, &provider);
         }
 
         let _ = app.emit("task-started", TaskStartedPayload {
@@ -189,6 +213,9 @@ pub async fn start_queue(
 
         let project_path = project.path.clone();
 
+        // Generate codebase map for this task (refreshed per task so new/modified files are reflected)
+        let codebase_map = crate::context_generator::generate_codebase_map(&project_path);
+
         // Snapshot git HEAD before running the task
         let git_hash = std::process::Command::new("git")
             .arg("rev-parse")
@@ -202,37 +229,80 @@ pub async fn start_queue(
                 None
             });
 
-        let claude_bin = resolve_claude_path();
+        let cli_bin = resolve_cli_path(&provider);
         let shell_path = get_shell_path();
 
-        let mut cmd = Command::new(&claude_bin);
-        cmd.arg("-p")
-            .arg(&task.description)
-            .arg("--dangerously-skip-permissions")
-            .arg("--output-format")
-            .arg("stream-json")
-            .arg("--verbose");
+        let mut cmd = Command::new(&cli_bin);
 
-        // Determine max turns: use task override if set, otherwise auto-estimate
-        let max_turns = task.max_turns.unwrap_or_else(|| {
-            crate::context_generator::estimate_max_turns(&task.description, task.tag.as_deref())
-        });
-        cmd.arg("--max-turns").arg(max_turns.to_string());
+        // Auto-select model if not specified
+        let effective_model = match &task.model {
+            Some(m) if !m.is_empty() => m.clone(),
+            _ => crate::context_generator::auto_select_model(
+                &task.description,
+                task.tag.as_deref(),
+                &provider,
+            ),
+        };
 
-        // Build combined context: project structure map + user instructions
-        let mut context_parts: Vec<String> = Vec::new();
-        if let Some(ref ctx) = project.project_context {
-            if !ctx.trim().is_empty() {
-                context_parts.push(ctx.clone());
+        match provider.as_str() {
+            "codex" => {
+                cmd.arg("exec")
+                    .arg("--yolo")
+                    .arg("--json")
+                    .arg("-C")
+                    .arg(&project_path);
+
+                cmd.arg("-m").arg(&effective_model);
+
+                // Build developer instructions with codebase map for context
+                let mut dev_instructions = Vec::new();
+                if !codebase_map.is_empty() {
+                    dev_instructions.push(codebase_map.clone());
+                }
+                if let Some(ref prompt) = project.system_prompt {
+                    if !prompt.trim().is_empty() {
+                        dev_instructions.push(prompt.clone());
+                    }
+                }
+                if !dev_instructions.is_empty() {
+                    cmd.arg("-c").arg(format!("developer_instructions={}", dev_instructions.join("\n\n")));
+                }
+
+                // Prompt must come last for codex exec
+                cmd.arg(&task.description);
             }
-        }
-        if let Some(ref prompt) = project.system_prompt {
-            if !prompt.trim().is_empty() {
-                context_parts.push(prompt.clone());
+            _ => {
+                cmd.arg("-p")
+                    .arg(&task.description)
+                    .arg("--dangerously-skip-permissions")
+                    .arg("--output-format")
+                    .arg("stream-json");
+
+                let max_turns = task.max_turns.unwrap_or_else(|| {
+                    crate::context_generator::estimate_max_turns(&task.description, task.tag.as_deref())
+                });
+                cmd.arg("--max-turns").arg(max_turns.to_string());
+
+                cmd.arg("--model").arg(&effective_model);
+
+                if let Some(max_tokens) = task.max_tokens {
+                    cmd.arg("--max-tokens").arg(max_tokens.to_string());
+                }
+
+                // Build system prompt with codebase map for context + caching
+                let mut system_parts = Vec::new();
+                if !codebase_map.is_empty() {
+                    system_parts.push(codebase_map.clone());
+                }
+                if let Some(ref prompt) = project.system_prompt {
+                    if !prompt.trim().is_empty() {
+                        system_parts.push(prompt.clone());
+                    }
+                }
+                if !system_parts.is_empty() {
+                    cmd.arg("--append-system-prompt").arg(system_parts.join("\n\n"));
+                }
             }
-        }
-        if !context_parts.is_empty() {
-            cmd.arg("--append-system-prompt").arg(context_parts.join("\n\n"));
         }
 
         cmd.current_dir(&project_path)
@@ -248,7 +318,7 @@ pub async fn start_queue(
         {
             Ok(c) => c,
             Err(e) => {
-                let error_msg = format!("Failed to spawn claude: {}", e);
+                let error_msg = format!("Failed to spawn {}: {}", if provider == "codex" { "codex" } else { "claude" }, e);
                 {
                     let conn = db.lock().unwrap();
                     let _ = db::add_task_log(&conn, &task.id, &error_msg, "stderr");
@@ -284,6 +354,7 @@ pub async fn start_queue(
         }
 
         let task_id = task.id.clone();
+        let provider_clone = provider.clone();
 
         if let Some(stdout) = stdout {
             let app_clone = app.clone();
@@ -299,43 +370,61 @@ pub async fn start_queue(
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
                         let event_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
-                        match event_type {
-                            "system" => {
-                                // Capture session_id from init event
-                                if let Some(sid) = json.get("session_id").and_then(|v| v.as_str()) {
-                                    let mut store = sessions_clone.lock().unwrap();
-                                    store.insert(task_key.clone(), sid.to_string());
+                        if provider_clone == "codex" {
+                            if event_type.contains("output_text.delta") {
+                                if let Some(delta) = json.get("delta").and_then(|v| v.as_str()) {
+                                    let conn = db_clone.lock().unwrap();
+                                    let _ = db::add_task_log(&conn, &task_id_clone, delta, "stdout");
+                                    let _ = app_clone.emit("task-output", TaskOutputPayload {
+                                        task_id: task_id_clone.clone(),
+                                        content: delta.to_string(),
+                                        log_type: "stdout".to_string(),
+                                    });
                                 }
                             }
-                            "assistant" => {
-                                // Extract text content from assistant messages
-                                if let Some(content) = json.pointer("/message/content") {
-                                    if let Some(arr) = content.as_array() {
-                                        for item in arr {
-                                            if item.get("type").and_then(|v| v.as_str()) == Some("text") {
-                                                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                                                    let conn = db_clone.lock().unwrap();
-                                                    let _ = db::add_task_log(&conn, &task_id_clone, text, "stdout");
-                                                    let _ = app_clone.emit("task-output", TaskOutputPayload {
-                                                        task_id: task_id_clone.clone(),
-                                                        content: text.to_string(),
-                                                        log_type: "stdout".to_string(),
-                                                    });
+                            // Skip output_text.done — deltas already logged above
+                        } else {
+                            match event_type {
+                                "system" => {
+                                    if let Some(sid) = json.get("session_id").and_then(|v| v.as_str()) {
+                                        let mut store = sessions_clone.lock().unwrap();
+                                        store.insert(task_key.clone(), sid.to_string());
+                                    }
+                                }
+                                "assistant" => {
+                                    if let Some(content) = json.pointer("/message/content") {
+                                        if let Some(arr) = content.as_array() {
+                                            for item in arr {
+                                                if item.get("type").and_then(|v| v.as_str()) == Some("text") {
+                                                    if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                                        let conn = db_clone.lock().unwrap();
+                                                        let _ = db::add_task_log(&conn, &task_id_clone, text, "stdout");
+                                                        let _ = app_clone.emit("task-output", TaskOutputPayload {
+                                                            task_id: task_id_clone.clone(),
+                                                            content: text.to_string(),
+                                                            log_type: "stdout".to_string(),
+                                                        });
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            }
-                            "result" => {
-                                // Also log the result text
-                                if let Some(result_text) = json.get("result").and_then(|v| v.as_str()) {
-                                    let conn = db_clone.lock().unwrap();
-                                    let _ = db::add_task_log(&conn, &task_id_clone, result_text, "stdout");
+                                "result" => {
+                                    if let Some(result_text) = json.get("result").and_then(|v| v.as_str()) {
+                                        let conn = db_clone.lock().unwrap();
+                                        let _ = db::add_task_log(&conn, &task_id_clone, result_text, "stdout");
+                                    }
+                                    let input_tokens = json.pointer("/usage/input_tokens").and_then(|v| v.as_i64()).unwrap_or(0)
+                                        + json.pointer("/usage/cache_read_input_tokens").and_then(|v| v.as_i64()).unwrap_or(0)
+                                        + json.pointer("/usage/cache_creation_input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                                    let output_tokens = json.pointer("/usage/output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                                    if input_tokens > 0 || output_tokens > 0 {
+                                        let conn = db_clone.lock().unwrap();
+                                        let _ = db::set_task_token_usage(&conn, &task_id_clone, input_tokens, output_tokens);
+                                    }
                                 }
-                            }
-                            _ => {
-                                // Log other events as-is for debugging
+                                _ => {}
                             }
                         }
                     } else {

@@ -47,12 +47,5 @@ export const useProjectStore = defineStore('project', () => {
     if (project) project.mode_id = modeId
   }
 
-  async function generateContext(projectId: string): Promise<string> {
-    const context = await invoke<string>('generate_project_context', { projectId })
-    const project = projects.value.find(p => p.id === projectId)
-    if (project) project.project_context = context
-    return context
-  }
-
-  return { projects, loading, error, loadProjects, createProject, deleteProject, validateProjectPath, updateSystemPrompt, updateProjectMode, generateContext }
+  return { projects, loading, error, loadProjects, createProject, deleteProject, validateProjectPath, updateSystemPrompt, updateProjectMode }
 })

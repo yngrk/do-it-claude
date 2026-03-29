@@ -120,8 +120,8 @@ export const useTaskStore = defineStore('task', () => {
     }
   }
 
-  async function createTask(projectId: string, title: string, description: string, tag: TaskTag | null = null) {
-    const task = await invoke<Task>('create_task', { projectId, title, description, tag })
+  async function createTask(projectId: string, title: string, description: string, tag: TaskTag | null = null, model: string | null = null, maxTokens: number | null = null) {
+    const task = await invoke<Task>('create_task', { projectId, title, description, tag, model, maxTokens })
     tasks.value = [...tasks.value, task]
     return task
   }
@@ -228,6 +228,20 @@ export const useTaskStore = defineStore('task', () => {
     return updated
   }
 
+  async function updateTaskModel(taskId: string, model: string | null) {
+    const updated = await invoke<Task>('update_task_model', { id: taskId, model })
+    const idx = tasks.value.findIndex(t => t.id === taskId)
+    if (idx !== -1) tasks.value[idx] = updated
+    return updated
+  }
+
+  async function updateTaskMaxTokens(taskId: string, maxTokens: number | null) {
+    const updated = await invoke<Task>('update_task_max_tokens', { id: taskId, maxTokens })
+    const idx = tasks.value.findIndex(t => t.id === taskId)
+    if (idx !== -1) tasks.value[idx] = updated
+    return updated
+  }
+
   async function estimateTaskTurns(description: string, tag: string | null): Promise<number> {
     return await invoke<number>('estimate_task_turns', { description, tag })
   }
@@ -260,6 +274,8 @@ export const useTaskStore = defineStore('task', () => {
     cancelAndRevert,
     resetSession,
     updateTaskMaxTurns,
+    updateTaskModel,
+    updateTaskMaxTokens,
     estimateTaskTurns,
     estimateTaskTokens,
   }

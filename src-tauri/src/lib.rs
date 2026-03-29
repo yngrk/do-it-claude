@@ -82,10 +82,15 @@ pub fn run() {
             commands::install_skill,
             commands::install_agent,
             commands::import_claude_file,
-            commands::generate_project_context,
             commands::update_task_max_turns,
+            commands::update_task_model,
+            commands::update_task_max_tokens,
             commands::estimate_task_turns,
             commands::estimate_task_tokens,
+            commands::get_setting,
+            commands::set_setting,
+            commands::check_codex,
+            commands::get_usage_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

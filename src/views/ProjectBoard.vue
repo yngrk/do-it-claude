@@ -5,7 +5,6 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useTaskStore } from '../stores/taskStore'
 import { useProjectStore } from '../stores/projectStore'
-import ProjectSettingsModal from '../components/ProjectSettingsModal.vue'
 import KanbanColumn from '../components/KanbanColumn.vue'
 import TaskCard from '../components/TaskCard.vue'
 import TaskDetail from '../components/TaskDetail.vue'
@@ -22,7 +21,6 @@ const projectId = computed(() => route.params.id as string)
 const routeTaskId = computed(() => typeof route.query.task === 'string' ? route.query.task : null)
 const routeFocus = computed<'details' | 'chat'>(() => route.query.focus === 'chat' ? 'chat' : 'details')
 const showAddDialog = ref(false)
-const showSettings = ref(false)
 const showTemplateModal = ref(false)
 const availableTemplates = ref<string[]>([])
 const loadedTemplateName = ref<string | null>(null)
@@ -348,12 +346,6 @@ function onDividerMouseDown(e: MouseEvent) {
             </svg>
             {{ loadedTemplateName ? 'Change' : 'Load Template' }}
           </button>
-          <button class="settings-btn" @click="showSettings = true">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-              <path d="M6.5 1L6.1 2.7a5.5 5.5 0 0 0-1.3.8L3.2 2.9l-1.5 2.6 1.5 1.3a5.5 5.5 0 0 0 0 1.4L1.7 9.5l1.5 2.6 1.6-.6c.4.3.8.6 1.3.8L6.5 15h3l.4-1.7c.5-.2.9-.5 1.3-.8l1.6.6 1.5-2.6-1.5-1.3a5.5 5.5 0 0 0 0-1.4l1.5-1.3-1.5-2.6-1.6.6a5.5 5.5 0 0 0-1.3-.8L9.5 1h-3ZM8 5.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-            </svg>
-            Settings
-          </button>
         </div>
       </div>
 
@@ -508,7 +500,6 @@ function onDividerMouseDown(e: MouseEvent) {
     <!-- Modals -->
     <TaskDetail :task="selectedTask" :initial-focus="selectedTaskFocus" @close="closeDetail" @retry="retryTask($event)" @move-to-backlog="moveToBacklog($event)" />
     <AddTaskDialog :visible="showAddDialog" :project-id="projectId" @close="showAddDialog = false" />
-    <ProjectSettingsModal :visible="showSettings" :project-id="projectId" @close="showSettings = false" />
 
     <!-- Load Template Modal -->
     <div v-if="showTemplateModal" class="modal-overlay" @click.self="showTemplateModal = false">
@@ -557,8 +548,6 @@ function onDividerMouseDown(e: MouseEvent) {
 /* Header buttons */
 .template-btn { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--text-secondary); font-family: inherit; font-size: 0.75rem; font-weight: 500; cursor: pointer; flex-shrink: 0; transition: all 0.15s ease; }
 .template-btn:hover { color: #60a5fa; border-color: #60a5fa; background: rgba(59, 130, 246, 0.1); }
-.settings-btn { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--text-secondary); font-family: inherit; font-size: 0.75rem; font-weight: 500; cursor: pointer; flex-shrink: 0; transition: all 0.15s ease; }
-.settings-btn:hover { color: #c084fc; border-color: #c084fc; background: rgba(168, 85, 247, 0.12); }
 
 /* Git badge */
 .git-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 100px; font-size: 0.6875rem; flex-shrink: 0; }

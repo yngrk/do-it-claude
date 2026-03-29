@@ -151,6 +151,9 @@ interface ParsedTask {
   title: string
   description: string
   tag: string
+  model?: string
+  max_turns?: number
+  max_tokens?: number
 }
 
 function parseMessage(content: string): { text: string; tasks: ParsedTask[] } {
@@ -212,6 +215,9 @@ function parseMessage(content: string): { text: string; tasks: ParsedTask[] } {
               <div v-for="(t, i) in parseMessage(msg.content).tasks" :key="i" class="msg-task-card">
                 <span v-if="t.tag" class="msg-task-tag">{{ t.tag }}</span>
                 <span class="msg-task-title">{{ t.title }}</span>
+                <span class="task-meta" v-if="t.model || t.max_turns">
+                  {{ t.model?.includes('opus') ? 'Opus' : 'Sonnet' }} · {{ t.max_turns || 'auto' }} turns
+                </span>
               </div>
             </div>
           </div>
@@ -532,6 +538,14 @@ function parseMessage(content: string): { text: string; tasks: ParsedTask[] } {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.task-meta {
+  font-size: 0.625rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .chat-error {

@@ -147,7 +147,6 @@ pub struct Project {
     pub created_at: String,
     pub system_prompt: Option<String>,
     pub mode_id: Option<String>,
-    pub project_context: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +160,11 @@ pub struct Task {
     pub sort_order: i32,
     pub exit_code: Option<i32>,
     pub max_turns: Option<i32>,
+    pub model: Option<String>,
+    pub max_tokens: Option<i32>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub provider: Option<String>,
     pub created_at: String,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
@@ -207,10 +211,10 @@ pub struct ProjectMessage {
 pub type DbConn = Arc<Mutex<Connection>>;
 
 const TASK_SELECT_COLUMNS: &str =
-    "id, project_id, title, description, tag, status, sort_order, exit_code, max_turns, created_at, started_at, completed_at, updated_at";
+    "id, project_id, title, description, tag, status, sort_order, exit_code, max_turns, model, max_tokens, input_tokens, output_tokens, provider, created_at, started_at, completed_at, updated_at";
 
 const PROJECT_SELECT_COLUMNS: &str =
-    "id, name, path, created_at, system_prompt, mode_id, project_context";
+    "id, name, path, created_at, system_prompt, mode_id";
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     Ok(Task {
@@ -223,10 +227,15 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         sort_order: row.get(6)?,
         exit_code: row.get(7)?,
         max_turns: row.get(8)?,
-        created_at: row.get(9)?,
-        started_at: row.get(10)?,
-        completed_at: row.get(11)?,
-        updated_at: row.get(12)?,
+        model: row.get(9)?,
+        max_tokens: row.get(10)?,
+        input_tokens: row.get(11)?,
+        output_tokens: row.get(12)?,
+        provider: row.get(13)?,
+        created_at: row.get(14)?,
+        started_at: row.get(15)?,
+        completed_at: row.get(16)?,
+        updated_at: row.get(17)?,
     })
 }
 
@@ -238,7 +247,6 @@ fn row_to_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
         created_at: row.get(3)?,
         system_prompt: row.get(4)?,
         mode_id: row.get(5)?,
-        project_context: row.get(6)?,
     })
 }
 
@@ -316,6 +324,17 @@ pub fn init_db(app_dir: &std::path::Path) -> Result<Connection> {
     // Migration: add max_turns to tasks
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN max_turns INTEGER", []);
 
+    // Migration: add token usage tracking to tasks
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN input_tokens INTEGER", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN output_tokens INTEGER", []);
+
+    // Migration: add model and max_tokens to tasks
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN model TEXT", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN max_tokens INTEGER", []);
+
+    // Migration: add provider to tasks (tracks which CLI executed the task)
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN provider TEXT", []);
+
     // Migration: create project_messages table
     let _ = conn.execute_batch("
         CREATE TABLE IF NOT EXISTS project_messages (
@@ -325,6 +344,14 @@ pub fn init_db(app_dir: &std::path::Path) -> Result<Connection> {
             content TEXT NOT NULL,
             created_at TEXT NOT NULL,
             FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+    ");
+
+    // Migration: create app_settings table
+    let _ = conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         );
     ");
 
@@ -371,7 +398,6 @@ pub fn create_project(conn: &Connection, name: &str, path: &str) -> Result<Proje
         created_at: Utc::now().to_rfc3339(),
         system_prompt: None,
         mode_id: None,
-        project_context: None,
     };
     conn.execute(
         "INSERT INTO projects (id, name, path, created_at) VALUES (?1, ?2, ?3, ?4)",
@@ -412,15 +438,7 @@ pub fn update_project_system_prompt(conn: &Connection, id: &str, system_prompt: 
     Ok(())
 }
 
-pub fn update_project_context(conn: &Connection, id: &str, context: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE projects SET project_context = ?1 WHERE id = ?2",
-        params![context, id],
-    )?;
-    Ok(())
-}
-
-pub fn create_task(conn: &Connection, project_id: &str, title: &str, description: &str, tag: Option<&str>) -> Result<Task> {
+pub fn create_task(conn: &Connection, project_id: &str, title: &str, description: &str, tag: Option<&str>, model: Option<&str>, max_tokens: Option<i32>) -> Result<Task> {
     let max_order: i32 = conn.query_row(
         "SELECT COALESCE(MAX(sort_order), -1) FROM tasks WHERE project_id = ?1",
         params![project_id],
@@ -437,14 +455,19 @@ pub fn create_task(conn: &Connection, project_id: &str, title: &str, description
         sort_order: max_order + 1,
         exit_code: None,
         max_turns: None,
+        model: model.map(|m| m.to_string()),
+        max_tokens,
+        input_tokens: None,
+        output_tokens: None,
+        provider: None,
         created_at: Utc::now().to_rfc3339(),
         started_at: None,
         completed_at: None,
         updated_at: Some(Utc::now().to_rfc3339()),
     };
     conn.execute(
-        "INSERT INTO tasks (id, project_id, title, description, tag, status, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![task.id, task.project_id, task.title, task.description, task.tag, task.status, task.sort_order, task.created_at, task.updated_at],
+        "INSERT INTO tasks (id, project_id, title, description, tag, status, sort_order, model, max_tokens, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![task.id, task.project_id, task.title, task.description, task.tag, task.status, task.sort_order, task.model, task.max_tokens, task.created_at, task.updated_at],
     )?;
     Ok(task)
 }
@@ -690,10 +713,97 @@ pub fn delete_template(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn set_task_token_usage(conn: &Connection, id: &str, input_tokens: i64, output_tokens: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE tasks SET input_tokens = ?1, output_tokens = ?2 WHERE id = ?3",
+        params![input_tokens, output_tokens, id],
+    )?;
+    Ok(())
+}
+
 pub fn update_task_max_turns(conn: &Connection, id: &str, max_turns: Option<i32>) -> Result<()> {
     conn.execute(
         "UPDATE tasks SET max_turns = ?1, updated_at = ?2 WHERE id = ?3",
         params![max_turns, Utc::now().to_rfc3339(), id],
     )?;
     Ok(())
+}
+
+pub fn update_task_model(conn: &Connection, id: &str, model: Option<&str>) -> Result<Task> {
+    conn.execute(
+        "UPDATE tasks SET model = ?1, updated_at = ?2 WHERE id = ?3",
+        params![model, Utc::now().to_rfc3339(), id],
+    )?;
+    get_task_by_id(conn, id)?.ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)
+}
+
+pub fn update_task_max_tokens(conn: &Connection, id: &str, max_tokens: Option<i32>) -> Result<Task> {
+    conn.execute(
+        "UPDATE tasks SET max_tokens = ?1, updated_at = ?2 WHERE id = ?3",
+        params![max_tokens, Utc::now().to_rfc3339(), id],
+    )?;
+    get_task_by_id(conn, id)?.ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)
+}
+
+pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
+    let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key = ?1")?;
+    let mut rows = stmt.query_map(params![key], |row| row.get::<_, String>(0))?;
+    match rows.next() {
+        Some(Ok(v)) => Ok(Some(v)),
+        Some(Err(e)) => Err(e),
+        None => Ok(None),
+    }
+}
+
+pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+pub fn set_task_provider(conn: &Connection, id: &str, provider: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE tasks SET provider = ?1 WHERE id = ?2",
+        params![provider, id],
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderUsageStats {
+    pub provider: String,
+    pub total_tasks: i64,
+    pub completed_tasks: i64,
+    pub failed_tasks: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+}
+
+pub fn get_usage_stats(conn: &Connection) -> Result<Vec<ProviderUsageStats>> {
+    let mut stmt = conn.prepare(
+        "SELECT
+            COALESCE(provider, 'claude') as provider,
+            COUNT(*) as total_tasks,
+            SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as completed_tasks,
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_tasks,
+            COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+            COALESCE(SUM(output_tokens), 0) as total_output_tokens
+        FROM tasks
+        WHERE status IN ('done', 'failed')
+        GROUP BY COALESCE(provider, 'claude')
+        ORDER BY provider ASC"
+    )?;
+    let stats = stmt.query_map([], |row| {
+        Ok(ProviderUsageStats {
+            provider: row.get(0)?,
+            total_tasks: row.get(1)?,
+            completed_tasks: row.get(2)?,
+            failed_tasks: row.get(3)?,
+            total_input_tokens: row.get(4)?,
+            total_output_tokens: row.get(5)?,
+        })
+    })?.collect::<Result<Vec<_>>>()?;
+    Ok(stats)
 }

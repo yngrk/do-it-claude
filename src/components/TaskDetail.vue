@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch, computed, nextTick } from 'vue'
+import { ref, watch, computed, nextTick, onMounted } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { useTaskStore } from '../stores/taskStore'
 import { formatDate, formatDuration, formatTimestamp } from '../utils/dateFormat'
 import { DEFAULT_TASK_TAGS } from '../types'
@@ -14,6 +15,8 @@ const editTitle = ref('')
 const editDescription = ref('')
 const editTag = ref<string | null>(null)
 const editMaxTurns = ref<number | null>(null)
+const editModel = ref<string | null>(null)
+const editMaxTokens = ref<number | null>(null)
 const tokenEstimate = ref<TokenEstimate | null>(null)
 const estimatedAutoTurns = ref<number | null>(null)
 const saving = ref(false)
@@ -22,6 +25,34 @@ const chatInput = ref('')
 const includeExecutionInChat = ref(false)
 const transcriptEl = ref<HTMLElement | null>(null)
 const chatInputEl = ref<HTMLTextAreaElement | null>(null)
+
+const provider = ref<'claude' | 'codex'>('claude')
+
+async function loadProvider() {
+  try {
+    const saved = await invoke<string | null>('get_setting', { key: 'cli_provider' })
+    if (saved === 'codex') provider.value = 'codex'
+  } catch {}
+}
+
+onMounted(() => {
+  loadProvider()
+})
+
+const modelOptions = computed(() => {
+  if (provider.value === 'codex') {
+    return [
+      { value: '', label: 'Auto' },
+      { value: 'gpt-5.4', label: 'GPT-5.4' },
+      { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+    ]
+  }
+  return [
+    { value: '', label: 'Auto' },
+    { value: 'claude-sonnet-4-20250514', label: 'Sonnet' },
+    { value: 'claude-opus-4-20250414', label: 'Opus' },
+  ]
+})
 
 const isEditable = computed(() => props.task?.status === 'backlog' || props.task?.status === 'queued')
 
@@ -35,6 +66,8 @@ watch(() => props.task, (task) => {
     editTag.value = task.tag || null
     chatInput.value = ''
     editMaxTurns.value = task.max_turns ?? null
+    editModel.value = task.model ?? null
+    editMaxTokens.value = task.max_tokens ?? null
     taskStore.estimateTaskTokens(task.id).then(est => {
       tokenEstimate.value = est
     }).catch(() => {})
@@ -155,6 +188,16 @@ const isDirty = computed(() => {
     || (editTag.value || null) !== (props.task.tag || null)
     || editMaxTurns.value !== (props.task.max_turns ?? null)
 })
+
+async function saveModel() {
+  if (!props.task) return
+  await taskStore.updateTaskModel(props.task.id, editModel.value)
+}
+
+async function saveMaxTokens() {
+  if (!props.task) return
+  await taskStore.updateTaskMaxTokens(props.task.id, editMaxTokens.value || null)
+}
 
 async function sendChatMessage() {
   if (!props.task || !chatInput.value.trim() || isChatSending.value || chatDisabledReason.value) return
@@ -277,11 +320,42 @@ watch(
           </div>
         </div>
 
+        <!-- Model -->
+        <div class="td-section">
+          <span class="td-section-label">Model</span>
+          <div v-if="isEditable">
+            <select v-model="editModel" @change="saveModel" class="td-turns-input td-model-select">
+              <option v-for="opt in modelOptions" :key="opt.value" :value="opt.value || null">{{ opt.label }}</option>
+            </select>
+          </div>
+          <div v-else-if="task?.model" class="td-turns-value">
+            {{ modelOptions.find(o => o.value === task.model)?.label ?? task.model }}
+          </div>
+        </div>
+
+        <!-- Max Tokens -->
+        <div class="td-section">
+          <span class="td-section-label">Max Tokens</span>
+          <div class="td-turns-row">
+            <input
+              v-if="isEditable"
+              v-model.number="editMaxTokens"
+              @blur="saveMaxTokens"
+              type="number"
+              class="td-turns-input"
+              placeholder="Auto"
+              min="1024"
+              step="1024"
+            />
+            <span v-else-if="task?.max_tokens" class="td-turns-value">{{ task.max_tokens.toLocaleString() }}</span>
+          </div>
+        </div>
+
         <!-- Token estimate bar (editable tasks) -->
         <div v-if="tokenEstimate && isEditable" class="td-token-bar">
           <span class="td-token-label">Est. input:</span>
           <span class="td-token-value">~{{ tokenEstimate.total_tokens.toLocaleString() }} tokens</span>
-          <span class="td-token-breakdown">(prompt: {{ tokenEstimate.prompt_tokens }}, context: {{ tokenEstimate.context_tokens }}, system: {{ tokenEstimate.system_tokens }})</span>
+          <span class="td-token-breakdown">(prompt: {{ tokenEstimate.prompt_tokens }}, system: {{ tokenEstimate.system_tokens }})</span>
         </div>
 
         <!-- Meta (only for non-editable / executed tasks) -->
@@ -306,9 +380,13 @@ watch(
             <span class="td-meta-label">Completed</span>
             <span class="td-meta-value">{{ formatDate(task.completed_at) }}</span>
           </div>
-          <div class="td-meta-item" v-if="tokenEstimate">
-            <span class="td-meta-label">Est. Input Tokens</span>
-            <span class="td-meta-value">~{{ tokenEstimate.total_tokens.toLocaleString() }}</span>
+          <div class="td-meta-item" v-if="task.input_tokens">
+            <span class="td-meta-label">Input Tokens</span>
+            <span class="td-meta-value">{{ task.input_tokens.toLocaleString() }}</span>
+          </div>
+          <div class="td-meta-item" v-if="task.output_tokens">
+            <span class="td-meta-label">Output Tokens</span>
+            <span class="td-meta-value">{{ task.output_tokens.toLocaleString() }}</span>
           </div>
         </div>
 
@@ -913,6 +991,13 @@ watch(
 .td-turns-hint {
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+.td-model-select {
+  width: 160px;
+  cursor: pointer;
+  appearance: auto;
+  background: var(--bg-surface);
 }
 
 .td-token-bar {
