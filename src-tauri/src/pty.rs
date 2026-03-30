@@ -54,9 +54,7 @@ pub fn spawn_pty(
         }
     }
 
-    pair.slave
-        .spawn_command(cmd)
-        .map_err(|e| e.to_string())?;
+    pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
 
     // Drop slave — we only need master
     drop(pair.slave);

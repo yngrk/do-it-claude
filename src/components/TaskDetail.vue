@@ -1,10 +1,16 @@
 <script setup lang="ts">
-import { ref, watch, computed, nextTick, onMounted } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useTaskStore } from '../stores/taskStore'
-import { formatDate, formatDuration, formatTimestamp } from '../utils/dateFormat'
 import { DEFAULT_TASK_TAGS } from '../types'
 import type { Task, TokenEstimate } from '../types'
+import { formatDuration } from '../utils/dateFormat'
+import TaskDefinitionPane from './task-detail/TaskDefinitionPane.vue'
+import TaskChatPane from './task-detail/TaskChatPane.vue'
+import TaskExecutionPane from './task-detail/TaskExecutionPane.vue'
+import TaskMetadataPane from './task-detail/TaskMetadataPane.vue'
+
+type ActivityTab = 'chat' | 'execution' | 'details'
 
 const props = defineProps<{ task: Task | null; initialFocus?: 'details' | 'chat' }>()
 const emit = defineEmits<{ close: []; retry: [taskId: string]; 'move-to-backlog': [taskId: string] }>()
@@ -14,19 +20,14 @@ const taskStore = useTaskStore()
 const editTitle = ref('')
 const editDescription = ref('')
 const editTag = ref<string | null>(null)
-const editMaxTurns = ref<number | null>(null)
 const editModel = ref<string | null>(null)
-const editMaxTokens = ref<number | null>(null)
 const tokenEstimate = ref<TokenEstimate | null>(null)
-const estimatedAutoTurns = ref<number | null>(null)
 const saving = ref(false)
-const logsExpanded = ref(false)
-const chatInput = ref('')
 const includeExecutionInChat = ref(false)
-const transcriptEl = ref<HTMLElement | null>(null)
-const chatInputEl = ref<HTMLTextAreaElement | null>(null)
-
+const chatInput = ref('')
+const logsExpanded = ref(false)
 const provider = ref<'claude' | 'codex'>('claude')
+const activeTab = ref<ActivityTab>('details')
 
 async function loadProvider() {
   try {
@@ -35,9 +36,8 @@ async function loadProvider() {
   } catch {}
 }
 
-onMounted(() => {
-  loadProvider()
-})
+const providerLabel = computed(() => provider.value === 'codex' ? 'Codex' : 'Claude')
+const isEditable = computed(() => props.task?.status === 'backlog' || props.task?.status === 'queued')
 
 const modelOptions = computed(() => {
   if (provider.value === 'codex') {
@@ -47,67 +47,27 @@ const modelOptions = computed(() => {
       { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
     ]
   }
+
   return [
     { value: '', label: 'Auto' },
-    { value: 'claude-sonnet-4-20250514', label: 'Sonnet' },
-    { value: 'claude-opus-4-20250414', label: 'Opus' },
+    { value: 'claude-sonnet-4-6', label: 'Sonnet' },
+    { value: 'claude-opus-4-6', label: 'Opus' },
   ]
 })
 
-const isEditable = computed(() => props.task?.status === 'backlog' || props.task?.status === 'queued')
-
-watch(() => props.task, (task) => {
-  logsExpanded.value = false
-  if (task) {
-    taskStore.loadTaskLogs(task.id)
-    taskStore.loadTaskMessages(task.id)
-    editTitle.value = task.title
-    editDescription.value = task.description
-    editTag.value = task.tag || null
-    chatInput.value = ''
-    editMaxTurns.value = task.max_turns ?? null
-    editModel.value = task.model ?? null
-    editMaxTokens.value = task.max_tokens ?? null
-    taskStore.estimateTaskTokens(task.id).then(est => {
-      tokenEstimate.value = est
-    }).catch(() => {})
-    taskStore.estimateTaskTurns(task.description, task.tag).then(turns => {
-      estimatedAutoTurns.value = turns
-    }).catch(() => {})
-  }
+const statusLabel = computed(() => props.task?.status.replace('_', ' ') ?? 'task')
+const activeTaskProviderLabel = computed(() => {
+  if (props.task?.provider === 'codex') return 'Codex'
+  if (props.task?.provider === 'claude') return 'Claude'
+  return providerLabel.value
 })
 
-watch(
-  () => [props.task?.id, props.initialFocus],
-  async ([taskId, initialFocus]) => {
-    if (!taskId || initialFocus !== 'chat') return
-    await nextTick()
-    chatInputEl.value?.focus()
-    transcriptEl.value?.scrollTo({ top: transcriptEl.value.scrollHeight })
-  },
-  { immediate: true },
-)
+const taskChip = computed(() => {
+  if (!props.task?.tag) return null
+  return DEFAULT_TASK_TAGS.find(tag => tag.value === props.task?.tag) ?? null
+})
 
-function selectTag(value: string) {
-  editTag.value = editTag.value === value ? null : value
-}
-
-async function save() {
-  if (!props.task || !editTitle.value) return
-  saving.value = true
-  try {
-    await taskStore.updateTask(props.task.id, {
-      title: editTitle.value,
-      description: editDescription.value,
-      tag: editTag.value,
-    })
-    if (editMaxTurns.value !== (props.task.max_turns ?? null)) {
-      await taskStore.updateTaskMaxTurns(props.task.id, editMaxTurns.value)
-    }
-  } finally {
-    saving.value = false
-  }
-}
+const duration = computed(() => formatDuration(props.task?.started_at ?? null, props.task?.completed_at ?? null))
 
 const logs = computed(() => {
   if (!props.task) return []
@@ -117,11 +77,6 @@ const logs = computed(() => {
 const liveOutput = computed(() => {
   if (!props.task) return []
   return taskStore.liveLogs[props.task.id] || []
-})
-
-const tagInfo = computed(() => {
-  if (!props.task?.tag) return null
-  return DEFAULT_TASK_TAGS.find(t => t.value === props.task!.tag) ?? null
 })
 
 const messages = computed(() => {
@@ -174,29 +129,71 @@ const transcriptEntries = computed(() => {
   }))
 
   return [...chatEntries, ...logEntries].sort((a, b) =>
-    new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
   )
 })
 
-const duration = computed(() => formatDuration(props.task?.started_at ?? null, props.task?.completed_at ?? null))
+const latestSignal = computed(() => {
+  if (liveOutput.value.length > 0) return liveOutput.value[liveOutput.value.length - 1]
+  if (logs.value.length > 0) return logs.value[logs.value.length - 1].content
+  return null
+})
 
-// Dirty check for save button
+const executionSummary = computed(() => {
+  if (!props.task) return ''
+  if (props.task.status === 'in_progress') {
+    return `${activeTaskProviderLabel.value} is currently working through this task. Live output will keep updating here while the run is active.`
+  }
+  if (props.task.status === 'failed') {
+    return `${activeTaskProviderLabel.value} finished this run with a failure state${props.task.exit_code !== null ? ` (exit ${props.task.exit_code})` : ''}. Review the latest signal and logs before retrying or asking for a follow-up fix.`
+  }
+  if (props.task.status === 'done') {
+    return `${activeTaskProviderLabel.value} completed this task successfully. Use chat to inspect what changed or execution logs to audit the full run.`
+  }
+  return `This task is ready for editing. Refine the prompt on the left, then queue it when the definition is solid.`
+})
+
 const isDirty = computed(() => {
   if (!props.task) return false
   return editTitle.value !== props.task.title
     || editDescription.value !== props.task.description
     || (editTag.value || null) !== (props.task.tag || null)
-    || editMaxTurns.value !== (props.task.max_turns ?? null)
 })
+
+const headerSubtitle = computed(() => {
+  if (!props.task) return ''
+  const parts = [statusLabel.value, activeTaskProviderLabel.value]
+  const model = modelOptions.value.find(option => option.value === props.task?.model)?.label ?? props.task.model
+  if (model) parts.push(model)
+  if (duration.value) parts.push(duration.value)
+  return parts.join(' · ')
+})
+
+function defaultTab(task: Task | null, focus?: 'details' | 'chat'): ActivityTab {
+  if (!task) return 'details'
+  if (focus === 'chat') return 'chat'
+  if (task.status === 'in_progress' || task.status === 'failed') return 'execution'
+  if (task.status === 'done') return 'chat'
+  return 'details'
+}
+
+async function save() {
+  if (!props.task || !editTitle.value.trim()) return
+  saving.value = true
+  try {
+    await taskStore.updateTask(props.task.id, {
+      title: editTitle.value,
+      description: editDescription.value,
+      tag: editTag.value,
+    })
+  } finally {
+    saving.value = false
+  }
+}
 
 async function saveModel() {
   if (!props.task) return
   await taskStore.updateTaskModel(props.task.id, editModel.value)
-}
-
-async function saveMaxTokens() {
-  if (!props.task) return
-  await taskStore.updateTaskMaxTokens(props.task.id, editMaxTokens.value || null)
 }
 
 async function sendChatMessage() {
@@ -210,817 +207,394 @@ async function sendChatMessage() {
   }
 }
 
+function handleWindowKeydown(event: KeyboardEvent) {
+  if (!props.task) return
+  if (event.key === 'Escape') {
+    emit('close')
+    return
+  }
+
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's' && isEditable.value && isDirty.value) {
+    event.preventDefault()
+    save()
+  }
+}
+
+onMounted(() => {
+  loadProvider()
+  window.addEventListener('keydown', handleWindowKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleWindowKeydown)
+})
+
+watch(() => props.task, (task) => {
+  logsExpanded.value = false
+  chatInput.value = ''
+  if (!task) return
+
+  taskStore.loadTaskLogs(task.id)
+  taskStore.loadTaskMessages(task.id)
+  editTitle.value = task.title
+  editDescription.value = task.description
+  editTag.value = task.tag || null
+  editModel.value = task.model ?? null
+  taskStore.estimateTaskTokens(task.id).then(est => {
+    tokenEstimate.value = est
+  }).catch(() => {
+    tokenEstimate.value = null
+  })
+}, { immediate: true })
+
+watch(
+  () => [props.task?.id, props.initialFocus],
+  (current, previous) => {
+    const [taskId, focus] = current as [string | undefined, 'details' | 'chat' | undefined]
+    const [previousTaskId, previousFocus] = (previous ?? []) as [string | undefined, 'details' | 'chat' | undefined]
+    if (!taskId || !props.task) return
+    if (taskId !== previousTaskId || focus !== previousFocus) {
+      activeTab.value = defaultTab(props.task, focus)
+    }
+  },
+  { immediate: true },
+)
+
 watch(
   () => [
-    props.task?.id,
+    activeTab.value,
     transcriptEntries.value.length,
     chatDraft.value.length,
     liveOutput.value.length,
     includeExecutionInChat.value,
   ],
-  async () => {
+  async ([tab]) => {
+    if (tab !== 'chat') return
     await nextTick()
-    if (transcriptEl.value) {
-      transcriptEl.value.scrollTop = transcriptEl.value.scrollHeight
-    }
+    const transcript = document.querySelector<HTMLElement>('.workspace-panel .chat-box')
+    if (transcript) transcript.scrollTop = transcript.scrollHeight
   },
 )
 </script>
 
 <template>
-  <div v-if="task" class="modal-overlay" @click.self="emit('close')">
-    <div class="modal td-modal slide-up">
-      <!-- Header -->
-      <div class="td-header">
-        <div class="td-header-left">
-          <span :class="`td-status-dot td-dot-${task.status}`"></span>
-          <span class="td-header-title">Task Detail</span>
-        </div>
-        <button class="btn-icon" @click="emit('close')" title="Close">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <path d="M1 1L13 13M13 1L1 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-        </button>
-      </div>
-
-      <div class="td-body">
-        <!-- Title -->
-        <div class="td-section">
-          <span class="td-section-label">Title</span>
-          <input
-            v-if="isEditable"
-            v-model="editTitle"
-            type="text"
-            class="td-field-input"
-            placeholder="Task title..."
-          />
-          <div v-else class="td-prompt-view">{{ task.title }}</div>
-        </div>
-        <!-- Labels -->
-        <div class="td-labels">
-          <template v-if="isEditable">
-            <button
-              v-for="t in DEFAULT_TASK_TAGS"
-              :key="t.value"
-              class="td-label-chip"
-              :class="{ 'td-label-active': editTag === t.value }"
-              :style="editTag === t.value
-                ? { background: t.color + '30', borderColor: t.color + '66', color: t.color }
-                : { borderColor: t.color + '33', color: t.color + 'aa' }"
-              @click="selectTag(t.value)"
-              type="button"
-            >
-              <span class="td-label-dot" :style="{ background: t.color }"></span>
-              {{ t.label }}
-            </button>
-          </template>
-          <template v-else>
-            <span v-if="tagInfo" class="td-label-chip td-label-active"
-              :style="{ background: tagInfo.color + '30', borderColor: tagInfo.color + '66', color: tagInfo.color }">
-              <span class="td-label-dot" :style="{ background: tagInfo.color }"></span>
-              {{ tagInfo.label }}
-            </span>
-            <span v-else class="td-no-label">No label</span>
-          </template>
-        </div>
-
-        <!-- Prompt -->
-        <div class="td-section">
-          <span class="td-section-label">Prompt</span>
-          <textarea
-            v-if="isEditable"
-            v-model="editDescription"
-            class="td-prompt-edit"
-            placeholder="Write the prompt Claude will execute..."
-            rows="6"
-          />
-          <div v-else class="td-prompt-view">{{ task.description || 'No prompt provided.' }}</div>
-        </div>
-
-        <!-- Max Turns -->
-        <div class="td-section">
-          <span class="td-section-label">Max Turns</span>
-          <div class="td-turns-row">
-            <input
-              v-if="isEditable"
-              :value="editMaxTurns ?? ''"
-              @input="editMaxTurns = $event.target.value === '' ? null : Math.max(1, Math.min(50, parseInt($event.target.value) || 0))"
-              type="number"
-              min="1"
-              max="50"
-              class="td-turns-input"
-              placeholder="Auto"
-            />
-            <span v-else class="td-turns-value">
-              {{ task.max_turns ? `${task.max_turns} turns` : `~${estimatedAutoTurns ?? '?'} turns (auto)` }}
-            </span>
-            <span v-if="estimatedAutoTurns && isEditable" class="td-turns-hint">
-              Auto-estimate: ~{{ estimatedAutoTurns }} turns
+  <div v-if="task" class="modal-overlay task-workspace-overlay" @click.self="emit('close')">
+    <div class="modal workspace-modal slide-up">
+      <header class="workspace-header">
+        <div class="workspace-header-main">
+          <div class="workspace-title-row">
+            <span :class="`workspace-status workspace-status-${task.status}`"></span>
+            <h2 class="workspace-title">{{ task.title }}</h2>
+            <span v-if="taskChip" class="workspace-tag" :style="{ background: `${taskChip.color}1e`, borderColor: `${taskChip.color}44`, color: taskChip.color }">
+              <span class="workspace-tag-dot" :style="{ background: taskChip.color }"></span>
+              {{ taskChip.label }}
             </span>
           </div>
+          <p class="workspace-subtitle">{{ headerSubtitle }}</p>
         </div>
 
-        <!-- Model -->
-        <div class="td-section">
-          <span class="td-section-label">Model</span>
-          <div v-if="isEditable">
-            <select v-model="editModel" @change="saveModel" class="td-turns-input td-model-select">
-              <option v-for="opt in modelOptions" :key="opt.value" :value="opt.value || null">{{ opt.label }}</option>
-            </select>
-          </div>
-          <div v-else-if="task?.model" class="td-turns-value">
-            {{ modelOptions.find(o => o.value === task.model)?.label ?? task.model }}
-          </div>
-        </div>
-
-        <!-- Max Tokens -->
-        <div class="td-section">
-          <span class="td-section-label">Max Tokens</span>
-          <div class="td-turns-row">
-            <input
-              v-if="isEditable"
-              v-model.number="editMaxTokens"
-              @blur="saveMaxTokens"
-              type="number"
-              class="td-turns-input"
-              placeholder="Auto"
-              min="1024"
-              step="1024"
-            />
-            <span v-else-if="task?.max_tokens" class="td-turns-value">{{ task.max_tokens.toLocaleString() }}</span>
-          </div>
-        </div>
-
-        <!-- Token estimate bar (editable tasks) -->
-        <div v-if="tokenEstimate && isEditable" class="td-token-bar">
-          <span class="td-token-label">Est. input:</span>
-          <span class="td-token-value">~{{ tokenEstimate.total_tokens.toLocaleString() }} tokens</span>
-          <span class="td-token-breakdown">(prompt: {{ tokenEstimate.prompt_tokens }}, system: {{ tokenEstimate.system_tokens }})</span>
-        </div>
-
-        <!-- Meta (only for non-editable / executed tasks) -->
-        <div v-if="!isEditable" class="td-meta">
-          <div class="td-meta-item" v-if="task.exit_code !== null">
-            <span class="td-meta-label">Exit code</span>
-            <span class="td-meta-value" :class="task.exit_code === 0 ? 'td-meta-ok' : 'td-meta-err'">{{ task.exit_code }}</span>
-          </div>
-          <div class="td-meta-item" v-if="duration">
-            <span class="td-meta-label">Duration</span>
-            <span class="td-meta-value">{{ duration }}</span>
-          </div>
-          <div class="td-meta-item" v-if="formatDate(task.created_at)">
-            <span class="td-meta-label">Created</span>
-            <span class="td-meta-value">{{ formatDate(task.created_at) }}</span>
-          </div>
-          <div class="td-meta-item" v-if="formatDate(task.started_at)">
-            <span class="td-meta-label">Started</span>
-            <span class="td-meta-value">{{ formatDate(task.started_at) }}</span>
-          </div>
-          <div class="td-meta-item" v-if="formatDate(task.completed_at)">
-            <span class="td-meta-label">Completed</span>
-            <span class="td-meta-value">{{ formatDate(task.completed_at) }}</span>
-          </div>
-          <div class="td-meta-item" v-if="task.input_tokens">
-            <span class="td-meta-label">Input Tokens</span>
-            <span class="td-meta-value">{{ task.input_tokens.toLocaleString() }}</span>
-          </div>
-          <div class="td-meta-item" v-if="task.output_tokens">
-            <span class="td-meta-label">Output Tokens</span>
-            <span class="td-meta-value">{{ task.output_tokens.toLocaleString() }}</span>
-          </div>
-        </div>
-
-        <div class="td-section">
-          <div class="td-section-header">
-            <span class="td-section-label">Task Chat</span>
-            <label class="td-chat-toggle">
-              <input v-model="includeExecutionInChat" type="checkbox" />
-              Include execution events
-            </label>
-          </div>
-
-          <div ref="transcriptEl" class="td-chat-box">
-            <div v-if="transcriptEntries.length === 0 && !chatDraft" class="td-chat-empty">
-              No chat yet. Ask Claude about this task to start a thread.
-            </div>
-
-            <div
-              v-for="entry in transcriptEntries"
-              :key="entry.id"
-              class="td-chat-message"
-              :class="[
-                `td-chat-${entry.role}`,
-                entry.kind === 'execution' ? `td-chat-${entry.tone}` : '',
-              ]"
-            >
-              <div class="td-chat-meta">
-                <span class="td-chat-role">
-                  {{
-                    entry.role === 'user'
-                      ? 'You'
-                      : entry.role === 'assistant'
-                        ? 'Claude'
-                        : 'Execution'
-                  }}
-                </span>
-                <span class="td-chat-time">{{ formatTimestamp(entry.created_at) }}</span>
-              </div>
-              <div class="td-chat-content">{{ entry.content }}</div>
-            </div>
-
-            <div v-if="chatDraft" class="td-chat-message td-chat-assistant td-chat-draft">
-              <div class="td-chat-meta">
-                <span class="td-chat-role">Claude</span>
-                <span class="td-chat-time">typing</span>
-              </div>
-              <div class="td-chat-content">{{ chatDraft }}</div>
-            </div>
-
-            <div
-              v-if="includeExecutionInChat && task.status === 'in_progress' && liveOutput.length > 0"
-              class="td-chat-message td-chat-execution"
-            >
-              <div class="td-chat-meta">
-                <span class="td-chat-role">Execution</span>
-                <span class="td-chat-time">live</span>
-              </div>
-              <div class="td-chat-content">{{ liveOutput[liveOutput.length - 1] }}</div>
-            </div>
-          </div>
-
-          <div v-if="chatError" class="td-chat-error">{{ chatError }}</div>
-          <div v-if="chatDisabledReason" class="td-chat-note">{{ chatDisabledReason }}</div>
-
-          <div class="td-chat-composer">
-            <textarea
-              ref="chatInputEl"
-              v-model="chatInput"
-              class="td-chat-input"
-              rows="3"
-              placeholder="Ask Claude about this task..."
-              :disabled="!!chatDisabledReason || isChatSending"
-              @keydown.enter.exact.prevent="sendChatMessage"
-            />
-            <button
-              class="btn btn-primary btn-sm"
-              :disabled="!chatInput.trim() || !!chatDisabledReason || isChatSending"
-              @click="sendChatMessage"
-            >
-              {{ isChatSending ? 'Sending...' : 'Send' }}
-            </button>
-          </div>
-        </div>
-
-        <!-- Live output -->
-        <div v-if="task.status === 'in_progress' && liveOutput.length > 0" class="td-section">
-          <div class="td-section-header">
-            <span class="td-section-label">
-              <span class="td-live-dot"></span>
-              Live Output
-            </span>
-          </div>
-          <div class="td-log-box">
-            <div v-for="(line, i) in liveOutput" :key="i" class="td-log-line">{{ line }}</div>
-            <span class="td-cursor"></span>
-          </div>
-        </div>
-
-        <!-- Logs -->
-        <div v-if="logs.length > 0" class="td-section">
-          <button class="td-section-toggle" @click="logsExpanded = !logsExpanded">
-            <svg
-              width="10" height="10" viewBox="0 0 10 10" fill="none"
-              class="td-chevron" :class="{ 'td-chevron-open': logsExpanded }"
-            >
-              <path d="M3 2L7 5L3 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            Execution Logs
-            <span class="td-log-count">{{ logs.length }}</span>
-          </button>
-          <div v-if="logsExpanded" class="td-log-box">
-            <div v-for="log in logs" :key="log.id" :class="`td-log-line td-log-${log.log_type}`">{{ log.content }}</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Footer -->
-      <div class="td-footer">
-        <div class="td-footer-left">
+        <div class="workspace-actions">
           <button
             v-if="task.status === 'done' || task.status === 'failed'"
             class="btn btn-secondary btn-sm"
             @click="emit('move-to-backlog', task.id)"
-          >Move to Queue</button>
+          >
+            Move to Queue
+          </button>
           <button
             v-if="task.status === 'failed'"
             class="btn btn-secondary btn-sm"
             @click="emit('retry', task.id)"
-          >Retry</button>
+          >
+            Retry
+          </button>
+          <button
+            v-if="isEditable && isDirty"
+            class="btn btn-primary btn-sm"
+            :disabled="!editTitle.trim() || saving"
+            @click="save"
+          >
+            {{ saving ? 'Saving...' : 'Save' }}
+          </button>
+          <button class="btn btn-secondary btn-sm" @click="emit('close')">Close</button>
         </div>
-        <button
-          v-if="isEditable && isDirty"
-          class="btn btn-primary btn-sm"
-          :disabled="!editTitle || saving"
-          @click="save"
-        >{{ saving ? 'Saving...' : 'Save' }}</button>
-        <button class="btn btn-secondary btn-sm" @click="emit('close')">Close</button>
+      </header>
+
+      <div class="workspace-body">
+        <aside class="workspace-sidebar">
+          <TaskDefinitionPane
+            :task="task"
+            :is-editable="isEditable"
+            :provider-label="providerLabel"
+            :edit-title="editTitle"
+            :edit-description="editDescription"
+            :edit-tag="editTag"
+            :edit-model="editModel"
+            :model-options="modelOptions"
+            :token-estimate="tokenEstimate"
+            @update:title="editTitle = $event"
+            @update:description="editDescription = $event"
+            @update:tag="editTag = $event"
+            @update:model="editModel = $event"
+            @save-model="saveModel"
+          />
+        </aside>
+
+        <section class="workspace-panel">
+          <div class="workspace-tabs">
+            <button
+              class="workspace-tab"
+              :class="{ 'workspace-tab-active': activeTab === 'chat' }"
+              @click="activeTab = 'chat'"
+            >
+              Chat
+            </button>
+            <button
+              class="workspace-tab"
+              :class="{ 'workspace-tab-active': activeTab === 'execution' }"
+              @click="activeTab = 'execution'"
+            >
+              Execution
+            </button>
+            <button
+              class="workspace-tab"
+              :class="{ 'workspace-tab-active': activeTab === 'details' }"
+              @click="activeTab = 'details'"
+            >
+              Details
+            </button>
+          </div>
+
+          <div
+            class="workspace-panel-body"
+            :class="{ 'workspace-panel-body-scroll': activeTab !== 'chat' }"
+          >
+            <TaskChatPane
+              v-if="activeTab === 'chat'"
+              :provider-label="providerLabel"
+              :transcript-entries="transcriptEntries"
+              :chat-draft="chatDraft"
+              :is-chat-sending="isChatSending"
+              :chat-error="chatError"
+              :chat-disabled-reason="chatDisabledReason"
+              :include-execution-in-chat="includeExecutionInChat"
+              :live-output="task.status === 'in_progress' ? liveOutput : []"
+              :chat-input="chatInput"
+              @update:includeExecutionInChat="includeExecutionInChat = $event"
+              @update:chatInput="chatInput = $event"
+              @send="sendChatMessage"
+            />
+
+            <TaskExecutionPane
+              v-else-if="activeTab === 'execution'"
+              :task="task"
+              :provider-label="providerLabel"
+              :duration="duration"
+              :live-output="liveOutput"
+              :logs="logs"
+              :logs-expanded="logsExpanded"
+              :summary-text="executionSummary"
+              :latest-signal="latestSignal"
+              @toggle-logs="logsExpanded = !logsExpanded"
+            />
+
+            <TaskMetadataPane
+              v-else
+              :task="task"
+              :provider-label="providerLabel"
+              :duration="duration"
+            />
+          </div>
+        </section>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.td-modal {
-  width: 560px;
+.task-workspace-overlay {
+  align-items: stretch;
+  padding: 24px;
 }
 
-/* Header */
-.td-header {
+.workspace-modal {
+  width: min(1180px, 100%);
+  height: min(88vh, calc(100vh - 48px));
+  max-height: min(88vh, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workspace-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px 22px 18px;
+  border-bottom: 1px solid var(--border);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent 42%),
+    var(--bg-card);
+}
+
+.workspace-header-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace-title-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 14px 20px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.workspace-title {
+  margin: 0;
+  font-size: 1.2rem;
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+.workspace-subtitle {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+}
+
+.workspace-status {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.workspace-status-backlog { background: var(--badge-backlog-color); }
+.workspace-status-queued { background: var(--badge-queued-color); }
+.workspace-status-in_progress { background: var(--badge-in_progress-color); animation: pulse-glow 1.6s ease infinite; }
+.workspace-status-done { background: var(--badge-done-color); }
+.workspace-status-failed { background: var(--badge-failed-color); }
+
+.workspace-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid;
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.workspace-tag-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.workspace-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.workspace-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.4fr);
+  overflow: hidden;
+}
+
+.workspace-sidebar {
+  min-width: 0;
+  min-height: 0;
+  padding: 22px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 72%, transparent), transparent 30%);
+}
+
+.workspace-panel {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-card);
+}
+
+.workspace-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 14px 0;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
-.td-header-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.td-header-title {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.td-status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.td-dot-backlog     { background: var(--badge-backlog-color); }
-.td-dot-queued      { background: var(--badge-queued-color); }
-.td-dot-in_progress { background: var(--badge-in_progress-color); animation: pulse-glow 1.6s ease infinite; }
-.td-dot-done        { background: var(--badge-done-color); }
-.td-dot-failed      { background: var(--badge-failed-color); }
-
-.td-field-input {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hover);
-  border-radius: var(--radius-xs);
-  padding: 8px 12px;
-  color: var(--text-primary);
-  font-size: 0.8125rem;
-  font-weight: 500;
-  font-family: inherit;
-  outline: none;
-  width: 100%;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.td-field-input:focus {
-  border-color: var(--accent);
-}
-
-.td-field-input::placeholder {
-  color: var(--text-secondary);
-}
-
-/* Body */
-.td-body {
-  padding: 20px;
-  overflow-y: auto;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-/* Labels */
-.td-labels {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.td-label-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 10px;
-  border-radius: 100px;
-  border: 1px solid;
-  font-size: 0.75rem;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  background: transparent;
-}
-
-.td-label-chip:not(.td-label-active) {
-  opacity: 0.7;
-}
-
-.td-label-chip:not(.td-label-active):hover {
-  opacity: 1;
-}
-
-.td-label-active {
-  opacity: 1;
-}
-
-.td-label-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.td-no-label {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
-
-/* Sections */
-.td-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.td-section-label {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.td-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-/* Prompt — edit */
-.td-prompt-edit {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hover);
-  border-radius: var(--radius-xs);
-  padding: 12px 14px;
-  color: var(--text-primary);
-  font-size: 0.8125rem;
-  font-family: inherit;
-  line-height: 1.65;
-  outline: none;
-  resize: vertical;
-  min-height: 100px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.td-prompt-edit:focus {
-  border-color: var(--accent);
-}
-
-.td-prompt-edit::placeholder {
-  color: var(--text-secondary);
-}
-
-/* Prompt — view */
-.td-prompt-view {
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-  line-height: 1.65;
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  padding: 12px 14px;
-}
-
-/* Meta grid */
-.td-meta {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  padding: 12px 14px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-}
-
-.td-meta-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.td-meta-label {
-  font-size: 0.6875rem;
-  font-weight: 500;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.td-meta-value {
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-}
-
-.td-meta-ok  { color: var(--success); font-weight: 600; }
-.td-meta-err { color: var(--error); font-weight: 600; }
-
-.td-chat-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.6875rem;
-  color: var(--text-muted);
-}
-
-.td-chat-toggle input {
-  accent-color: var(--accent);
-}
-
-.td-chat-box {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-height: 280px;
-  overflow-y: auto;
-  padding: 12px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-}
-
-.td-chat-empty,
-.td-chat-note {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
-
-.td-chat-message {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px 12px;
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--border);
-  background: var(--bg-surface);
-}
-
-.td-chat-user {
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-surface));
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
-}
-
-.td-chat-assistant {
-  background: var(--bg-card);
-}
-
-.td-chat-execution {
-  background: var(--bg-terminal);
-}
-
-.td-chat-stderr {
-  border-color: rgba(248, 113, 113, 0.35);
-}
-
-.td-chat-draft {
-  border-style: dashed;
-}
-
-.td-chat-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 0.6875rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.td-chat-role {
-  font-weight: 600;
-}
-
-.td-chat-content {
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.td-chat-composer {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.td-chat-input {
-  width: 100%;
-  min-height: 84px;
-  resize: vertical;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hover);
-  border-radius: var(--radius-xs);
-  padding: 12px 14px;
-  color: var(--text-primary);
-  font-size: 0.8125rem;
-  font-family: inherit;
-  line-height: 1.6;
-  outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.td-chat-input:focus {
-  border-color: var(--accent);
-}
-
-.td-chat-input:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.td-chat-error {
-  font-size: 0.75rem;
-  color: var(--error);
-}
-
-/* Logs */
-.td-section-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
+.workspace-tab {
+  padding: 8px 10px 9px;
   border: none;
+  border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--text-muted);
-  font-family: inherit;
-  font-size: 0.6875rem;
+  font: inherit;
+  font-size: 0.76rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.02em;
   cursor: pointer;
-  transition: var(--transition);
 }
 
-.td-section-toggle:hover {
-  color: var(--text-secondary);
-}
-
-.td-chevron { transition: transform 0.15s ease; }
-.td-chevron-open { transform: rotate(90deg); }
-
-.td-log-count {
-  font-size: 0.625rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  background: var(--hover-overlay);
-  padding: 0 5px;
-  border-radius: 100px;
-  line-height: 1.6;
-}
-
-.td-log-box {
-  background: var(--bg-terminal);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  padding: 10px 14px;
-  max-height: 240px;
-  overflow-y: auto;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-  font-size: 0.6875rem;
-  line-height: 1.65;
-}
-
-.td-log-line {
-  color: var(--text-secondary);
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.td-log-stderr { color: #f87171; }
-
-.td-live-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--success);
-  animation: pulse-glow 1.6s ease infinite;
-}
-
-.td-cursor {
-  display: inline-block;
-  width: 5px;
-  height: 10px;
-  background: var(--text-secondary);
-  animation: blink-cursor 1s step-end infinite;
-}
-
-@keyframes blink-cursor {
-  0%, 100% { opacity: 0.7; }
-  50% { opacity: 0; }
-}
-
-/* Footer */
-.td-footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 14px 20px;
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.td-footer-left {
-  display: flex;
-  gap: 8px;
-  margin-right: auto;
-}
-
-.td-turns-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.td-turns-input {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hover);
-  border-radius: var(--radius-xs);
-  padding: 6px 10px;
+.workspace-tab-active {
   color: var(--text-primary);
-  font-size: 0.8125rem;
-  font-family: inherit;
-  outline: none;
-  width: 80px;
-  transition: border-color 0.15s ease;
+  border-bottom-color: var(--accent);
 }
 
-.td-turns-input:focus {
-  border-color: var(--accent);
+.workspace-panel-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 14px;
 }
 
-.td-turns-input::placeholder {
-  color: var(--text-muted);
+.workspace-panel-body-scroll {
+  overflow-y: auto;
 }
 
-.td-turns-value {
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-}
+@media (max-width: 980px) {
+  .task-workspace-overlay {
+    padding: 12px;
+  }
 
-.td-turns-hint {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
+  .workspace-modal {
+    width: 100%;
+    height: min(100%, calc(100vh - 24px));
+    max-height: min(100%, calc(100vh - 24px));
+  }
 
-.td-model-select {
-  width: 160px;
-  cursor: pointer;
-  appearance: auto;
-  background: var(--bg-surface);
-}
+  .workspace-body {
+    grid-template-columns: 1fr;
+  }
 
-.td-token-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  font-size: 0.75rem;
-}
+  .workspace-sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 42vh;
+  }
 
-.td-token-label {
-  color: var(--text-muted);
-}
+  .workspace-header {
+    flex-direction: column;
+  }
 
-.td-token-value {
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-
-.td-token-breakdown {
-  color: var(--text-muted);
+  .workspace-actions {
+    justify-content: flex-start;
+  }
 }
 </style>

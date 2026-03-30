@@ -10,6 +10,8 @@ const props = defineProps<{
   tasks: Task[]
   allowDrag: boolean
   deletable?: boolean
+  runningTaskId?: string
+  runningOutput?: string
 }>()
 
 const emit = defineEmits<{
@@ -30,6 +32,7 @@ onMounted(() => {
     forceFallback: true,
     ghostClass: 'sortable-ghost',
     draggable: '.task-item',
+    filter: '.task-item--running',
     onAdd(evt) {
       const taskId = evt.item.dataset.taskId
       const newIndex = evt.newIndex ?? 0
@@ -78,11 +81,13 @@ onBeforeUnmount(() => {
         v-for="task in tasks"
         :key="task.id"
         :data-task-id="task.id"
-        class="task-item"
+        :class="['task-item', { 'task-item--running': task.id === runningTaskId }]"
       >
         <TaskCard
           :task="task"
           :deletable="deletable"
+          :running="task.id === runningTaskId"
+          :last-output="task.id === runningTaskId ? runningOutput : undefined"
           @open-detail="emit('open-detail', task)"
           @delete="emit('delete-task', task.id)"
         />

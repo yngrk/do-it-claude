@@ -1,9 +1,12 @@
-use tauri::{AppHandle, Emitter, Manager, State};
-use crate::db::{self, DbConn, Project, Task, TaskLog, TaskMessage, ProjectMessage, PromptTemplate, ProviderUsageStats};
-use crate::executor::{self, RunningProcesses, StopFlags, SessionStore, ActiveQueues};
+use crate::db::{
+    self, DbConn, Project, ProjectMessage, PromptTemplate, ProviderUsageStats, Task, TaskLog,
+    TaskMessage,
+};
+use crate::executor::{self, ActiveQueues, RunningProcesses, SessionStore, StopFlags};
 use crate::pty::{self, PtySessions};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use base64::Engine as _;
+use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[tauri::command]
 pub fn create_project(db: State<DbConn>, name: String, path: String) -> Result<Project, String> {
@@ -57,7 +60,12 @@ pub fn init_git(path: String) -> Result<(), String> {
         .output();
 
     let _ = std::process::Command::new("git")
-        .args(["commit", "-m", "Initial commit (Do It Claude)", "--allow-empty"])
+        .args([
+            "commit",
+            "-m",
+            "Initial commit (Do It Claude)",
+            "--allow-empty",
+        ])
         .current_dir(&path)
         .output();
 
@@ -65,9 +73,29 @@ pub fn init_git(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn create_task(db: State<DbConn>, project_id: String, title: String, description: String, tag: Option<String>, model: Option<String>, max_tokens: Option<i32>) -> Result<Task, String> {
+pub fn create_task(
+    db: State<DbConn>,
+    project_id: String,
+    title: String,
+    description: String,
+    tag: Option<String>,
+    model: Option<String>,
+) -> Result<Task, String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
-    db::create_task(&conn, &project_id, &title, &description, tag.as_deref(), model.as_deref(), max_tokens).map_err(|e| e.to_string())
+    let project = db::get_project_by_id(&conn, &project_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Project not found".to_string())?;
+    let description =
+        crate::context_generator::normalize_project_local_paths(&description, &project.path);
+    db::create_task(
+        &conn,
+        &project_id,
+        &title,
+        &description,
+        tag.as_deref(),
+        model.as_deref(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -77,10 +105,35 @@ pub fn get_tasks(db: State<DbConn>, project_id: String) -> Result<Vec<Task>, Str
 }
 
 #[tauri::command]
-pub fn update_task(db: State<DbConn>, id: String, title: Option<String>, description: Option<String>, tag: Option<Option<String>>) -> Result<Task, String> {
+pub fn update_task(
+    db: State<DbConn>,
+    id: String,
+    title: Option<String>,
+    description: Option<String>,
+    tag: Option<Option<String>>,
+) -> Result<Task, String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
+    let project_path = db::get_task_by_id(&conn, &id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Task not found".to_string())
+        .and_then(|task| {
+            db::get_project_by_id(&conn, &task.project_id)
+                .map_err(|e| e.to_string())?
+                .map(|project| project.path)
+                .ok_or_else(|| "Project not found".to_string())
+        })?;
+    let normalized_description = description
+        .as_deref()
+        .map(|value| crate::context_generator::normalize_project_local_paths(value, &project_path));
     let tag_ref = tag.as_ref().map(|t| t.as_deref());
-    db::update_task(&conn, &id, title.as_deref(), description.as_deref(), tag_ref).map_err(|e| e.to_string())
+    db::update_task(
+        &conn,
+        &id,
+        title.as_deref(),
+        normalized_description.as_deref(),
+        tag_ref,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -90,7 +143,12 @@ pub fn delete_task(db: State<DbConn>, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn move_task(db: State<DbConn>, id: String, new_status: String, new_sort_order: i32) -> Result<Task, String> {
+pub fn move_task(
+    db: State<DbConn>,
+    id: String,
+    new_status: String,
+    new_sort_order: i32,
+) -> Result<Task, String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     db::move_task(&conn, &id, &new_status, new_sort_order).map_err(|e| e.to_string())
 }
@@ -132,12 +190,24 @@ pub async fn start_queue(
 
     let provider = {
         let conn = db.lock().map_err(|e| e.to_string())?;
-        db::get_setting(&conn, "cli_provider").map_err(|e| e.to_string())?.unwrap_or_else(|| "claude".to_string())
+        db::get_setting(&conn, "cli_provider")
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| "claude".to_string())
     };
 
     // active flag is now set; spawn the loop
     tokio::spawn(async move {
-        executor::start_queue(app, db, processes, stop_flags_inner, sessions, active_queues_inner, project_id, provider).await;
+        executor::start_queue(
+            app,
+            db,
+            processes,
+            stop_flags_inner,
+            sessions,
+            active_queues_inner,
+            project_id,
+            provider,
+        )
+        .await;
     });
 
     Ok(())
@@ -150,6 +220,7 @@ pub fn reset_session(
     project_id: Option<String>,
     task_id: Option<String>,
 ) -> Result<(), String> {
+    let project_id_for_sessions = project_id.clone();
     let task_ids = if let Some(task_id) = task_id {
         vec![task_id]
     } else if let Some(project_id) = project_id {
@@ -167,14 +238,15 @@ pub fn reset_session(
     for task_id in task_ids {
         store.remove(&task_id);
     }
+    if let Some(project_id) = project_id_for_sessions {
+        store.remove(&format!("project-chat-{}", project_id));
+        store.remove(&format!("queue-project-{}", project_id));
+    }
     Ok(())
 }
 
 #[tauri::command]
-pub fn pause_queue(
-    stop_flags: State<StopFlags>,
-    project_id: String,
-) -> Result<(), String> {
+pub fn pause_queue(stop_flags: State<StopFlags>, project_id: String) -> Result<(), String> {
     executor::pause_queue(&stop_flags, &project_id);
     Ok(())
 }
@@ -247,6 +319,18 @@ fn extract_assistant_text(json: &serde_json::Value) -> Vec<String> {
     chunks
 }
 
+fn codex_thread_id(json: &serde_json::Value) -> Option<&str> {
+    match json.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+        "thread.started" => json.get("thread_id").and_then(|v| v.as_str()),
+        "session.started" | "system" => json.get("session_id").and_then(|v| v.as_str()),
+        _ => None,
+    }
+}
+
+fn new_codex_output_file() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("do-it-claude-codex-{}.txt", uuid::Uuid::new_v4()))
+}
+
 #[tauri::command]
 pub async fn send_task_message(
     app: AppHandle,
@@ -264,47 +348,83 @@ pub async fn send_task_message(
     let db_conn = db.inner().clone();
     let (task, project) = {
         let conn = db_conn.lock().map_err(|e| e.to_string())?;
-        let task = db::get_task_by_id(&conn, &task_id).map_err(|e| e.to_string())?
+        let task = db::get_task_by_id(&conn, &task_id)
+            .map_err(|e| e.to_string())?
             .ok_or_else(|| "Task not found".to_string())?;
-        let project = db::get_project_by_id(&conn, &task.project_id).map_err(|e| e.to_string())?
+        let project = db::get_project_by_id(&conn, &task.project_id)
+            .map_err(|e| e.to_string())?
             .ok_or_else(|| "Project not found".to_string())?;
         (task, project)
     };
 
     if processes.inner().lock().await.contains_key(&project.id) {
-        return Err("Chat is unavailable while a task is actively running for this project".to_string());
+        return Err(
+            "Chat is unavailable while a task is actively running for this project".to_string(),
+        );
     }
 
     let user_message = {
         let conn = db_conn.lock().map_err(|e| e.to_string())?;
-        db::add_task_message(&conn, &task_id, "user", &content, "chat").map_err(|e| e.to_string())?
+        db::add_task_message(&conn, &task_id, "user", &content, "chat")
+            .map_err(|e| e.to_string())?
     };
 
-    let _ = app.emit("task-chat-started", TaskChatStartedPayload {
-        task_id: task_id.clone(),
-    });
+    let _ = app.emit(
+        "task-chat-started",
+        TaskChatStartedPayload {
+            task_id: task_id.clone(),
+        },
+    );
 
     let provider = {
         let conn = db_conn.lock().map_err(|e| e.to_string())?;
-        db::get_setting(&conn, "cli_provider").map_err(|e| e.to_string())?.unwrap_or_else(|| "claude".to_string())
+        db::get_setting(&conn, "cli_provider")
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| "claude".to_string())
     };
+    let normalized_content =
+        crate::context_generator::normalize_project_local_paths(&content, &project.path);
+    let normalized_system_prompt = project.system_prompt.as_deref().map(|prompt| {
+        crate::context_generator::normalize_project_local_paths(prompt, &project.path)
+    });
 
     let existing_session = {
-        let session_id = sessions.inner().lock().map_err(|e| e.to_string())?.get(&task_id).cloned();
+        let session_id = sessions
+            .inner()
+            .lock()
+            .map_err(|e| e.to_string())?
+            .get(&task_id)
+            .cloned();
         session_id
     };
 
     let cli_bin = executor::resolve_cli_path(&provider);
     let shell_path = executor::get_shell_path();
+    let codex_output_file = if provider == "codex" {
+        Some(new_codex_output_file())
+    } else {
+        None
+    };
 
     let mut cmd = tokio::process::Command::new(&cli_bin);
 
     if provider == "codex" {
-        cmd.arg("exec")
-            .arg("--yolo")
-            .arg("--json")
-            .arg("-C")
-            .arg(&project.path);
+        if let Some(ref sid) = existing_session {
+            cmd.arg("exec").arg("resume").arg(sid).arg("--json");
+        } else {
+            cmd.arg("exec")
+                .arg("--yolo")
+                .arg("--json")
+                .arg("-C")
+                .arg(&project.path);
+
+            if let Some(ref prompt) = normalized_system_prompt {
+                if !prompt.trim().is_empty() {
+                    cmd.arg("-c")
+                        .arg(format!("developer_instructions={}", prompt));
+                }
+            }
+        }
 
         if let Some(ref model) = task.model {
             if !model.is_empty() {
@@ -312,20 +432,19 @@ pub async fn send_task_message(
             }
         }
 
-        if let Some(ref prompt) = project.system_prompt {
-            if !prompt.trim().is_empty() {
-                cmd.arg("-c").arg(format!("developer_instructions={}", prompt));
-            }
+        if let Some(ref path) = codex_output_file {
+            cmd.arg("--output-last-message").arg(path);
         }
 
         // Prompt must come last for codex exec
-        cmd.arg(&content);
+        cmd.arg(&normalized_content);
     } else {
         cmd.arg("-p")
             .arg(&content)
             .arg("--dangerously-skip-permissions")
             .arg("--output-format")
-            .arg("stream-json");
+            .arg("stream-json")
+            .arg("--verbose");
 
         if let Some(ref sid) = existing_session {
             cmd.arg("--resume").arg(sid);
@@ -347,8 +466,14 @@ pub async fn send_task_message(
     }
 
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    let stdout = child.stdout.take().ok_or_else(|| "Failed to capture stdout".to_string())?;
-    let stderr = child.stderr.take().ok_or_else(|| "Failed to capture stderr".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture stderr".to_string())?;
 
     let app_stdout = app.clone();
     let sessions_stdout = sessions.inner().clone();
@@ -363,22 +488,32 @@ pub async fn send_task_message(
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
                 let event_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 if provider_stdout == "codex" {
+                    if let Some(sid) = codex_thread_id(&json) {
+                        let mut store = sessions_stdout.lock().unwrap();
+                        store.insert(task_id_stdout.clone(), sid.to_string());
+                    }
                     if event_type.contains("output_text.delta") {
                         if let Some(delta) = json.get("delta").and_then(|v| v.as_str()) {
                             full_response.push_str(delta);
-                            let _ = app_stdout.emit("task-chat-chunk", TaskChatChunkPayload {
-                                task_id: task_id_stdout.clone(),
-                                content: delta.to_string(),
-                            });
+                            let _ = app_stdout.emit(
+                                "task-chat-chunk",
+                                TaskChatChunkPayload {
+                                    task_id: task_id_stdout.clone(),
+                                    content: delta.to_string(),
+                                },
+                            );
                         }
                     } else if event_type.contains("output_text.done") {
                         if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
                             if full_response.is_empty() {
                                 full_response.push_str(text);
-                                let _ = app_stdout.emit("task-chat-chunk", TaskChatChunkPayload {
-                                    task_id: task_id_stdout.clone(),
-                                    content: text.to_string(),
-                                });
+                                let _ = app_stdout.emit(
+                                    "task-chat-chunk",
+                                    TaskChatChunkPayload {
+                                        task_id: task_id_stdout.clone(),
+                                        content: text.to_string(),
+                                    },
+                                );
                             }
                         }
                     }
@@ -393,20 +528,28 @@ pub async fn send_task_message(
                         "assistant" => {
                             for chunk in extract_assistant_text(&json) {
                                 full_response.push_str(&chunk);
-                                let _ = app_stdout.emit("task-chat-chunk", TaskChatChunkPayload {
-                                    task_id: task_id_stdout.clone(),
-                                    content: chunk,
-                                });
+                                let _ = app_stdout.emit(
+                                    "task-chat-chunk",
+                                    TaskChatChunkPayload {
+                                        task_id: task_id_stdout.clone(),
+                                        content: chunk,
+                                    },
+                                );
                             }
                         }
                         "result" => {
                             if full_response.is_empty() {
-                                if let Some(result_text) = json.get("result").and_then(|v| v.as_str()) {
+                                if let Some(result_text) =
+                                    json.get("result").and_then(|v| v.as_str())
+                                {
                                     full_response.push_str(result_text);
-                                    let _ = app_stdout.emit("task-chat-chunk", TaskChatChunkPayload {
-                                        task_id: task_id_stdout.clone(),
-                                        content: result_text.to_string(),
-                                    });
+                                    let _ = app_stdout.emit(
+                                        "task-chat-chunk",
+                                        TaskChatChunkPayload {
+                                            task_id: task_id_stdout.clone(),
+                                            content: result_text.to_string(),
+                                        },
+                                    );
                                 }
                             }
                         }
@@ -430,41 +573,89 @@ pub async fn send_task_message(
     });
 
     let status = child.wait().await.map_err(|e| e.to_string())?;
-    let assistant_content = stdout_handle.await.map_err(|e| e.to_string())?;
+    let mut assistant_content = stdout_handle.await.map_err(|e| e.to_string())?;
     let stderr_output = stderr_handle.await.map_err(|e| e.to_string())?;
+
+    if assistant_content.trim().is_empty() {
+        if let Some(ref path) = codex_output_file {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if !text.trim().is_empty() {
+                    assistant_content = text;
+                }
+            }
+        }
+    }
+
+    if let Some(ref path) = codex_output_file {
+        let _ = std::fs::remove_file(path);
+    }
 
     if !status.success() {
         let error = stderr_output.join("\n").trim().to_string();
-        let error = if error.is_empty() { "CLI chat failed".to_string() } else { error };
-        let _ = app.emit("task-chat-failed", TaskChatFailedPayload {
-            task_id,
-            error: error.clone(),
-        });
+        let error = if error.is_empty() {
+            format!(
+                "{} chat failed",
+                if provider == "codex" {
+                    "Codex"
+                } else {
+                    "Claude"
+                }
+            )
+        } else {
+            error
+        };
+        let _ = app.emit(
+            "task-chat-failed",
+            TaskChatFailedPayload {
+                task_id,
+                error: error.clone(),
+            },
+        );
         return Err(error);
     }
 
     let final_content = assistant_content.trim().to_string();
     if final_content.is_empty() {
-        let error = "Claude returned an empty response".to_string();
-        let _ = app.emit("task-chat-failed", TaskChatFailedPayload {
-            task_id,
-            error: error.clone(),
-        });
+        let error = format!(
+            "{} returned an empty response",
+            if provider == "codex" {
+                "Codex"
+            } else {
+                "Claude"
+            }
+        );
+        let _ = app.emit(
+            "task-chat-failed",
+            TaskChatFailedPayload {
+                task_id,
+                error: error.clone(),
+            },
+        );
         return Err(error);
     }
 
     let assistant_message = {
         let conn = db_conn.lock().map_err(|e| e.to_string())?;
-        db::add_task_message(&conn, &user_message.task_id, "assistant", &final_content, "chat").map_err(|e| e.to_string())?
+        db::add_task_message(
+            &conn,
+            &user_message.task_id,
+            "assistant",
+            &final_content,
+            "chat",
+        )
+        .map_err(|e| e.to_string())?
     };
 
-    let _ = app.emit("task-chat-completed", TaskChatCompletedPayload {
-        task_id: user_message.task_id.clone(),
-        project_id: project.id.clone(),
-        project_name: project.name.clone(),
-        task_title: task.title.clone(),
-        message: assistant_message.clone(),
-    });
+    let _ = app.emit(
+        "task-chat-completed",
+        TaskChatCompletedPayload {
+            task_id: user_message.task_id.clone(),
+            project_id: project.id.clone(),
+            project_name: project.name.clone(),
+            task_title: task.title.clone(),
+            message: assistant_message.clone(),
+        },
+    );
 
     Ok(assistant_message)
 }
@@ -477,31 +668,86 @@ pub struct TasksCreatedPayload {
     tasks: Vec<Task>,
 }
 
-fn parse_and_create_tasks(conn: &rusqlite::Connection, project_id: &str, content: &str) -> Vec<Task> {
+fn strip_code_fences(s: &str) -> &str {
+    let s = s.trim();
+    // Strip opening fence: ```json or ```
+    let s = if s.starts_with("```") {
+        let after = &s[3..];
+        // skip optional language tag (e.g. "json\n")
+        if let Some(newline) = after.find('\n') {
+            after[newline + 1..].trim()
+        } else {
+            after.trim()
+        }
+    } else {
+        s
+    };
+    // Strip closing fence
+    if s.ends_with("```") {
+        s[..s.len() - 3].trim()
+    } else {
+        s
+    }
+}
+
+fn parse_and_create_tasks(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    project_path: &str,
+    content: &str,
+) -> Vec<Task> {
     let mut created = Vec::new();
     let mut search_from = 0;
     while let Some(start) = content[search_from..].find("<tasks>") {
         let abs_start = search_from + start + "<tasks>".len();
         if let Some(end) = content[abs_start..].find("</tasks>") {
             let abs_end = abs_start + end;
-            let json_str = content[abs_start..abs_end].trim();
-            if let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(json_str) {
-                for item in items {
-                    let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("").trim();
-                    let description = item.get("description").and_then(|v| v.as_str()).unwrap_or("").trim();
-                    let tag = item.get("tag").and_then(|v| v.as_str());
-                    let model = item.get("model").and_then(|v| v.as_str());
-                    let max_turns = item.get("max_turns").and_then(|v| v.as_i64()).map(|v| v as i32);
-                    let max_tokens = item.get("max_tokens").and_then(|v| v.as_i64()).map(|v| v as i32);
-                    if !title.is_empty() {
-                        if let Ok(mut task) = db::create_task(conn, project_id, title, description, tag, model, max_tokens) {
-                            if let Some(turns) = max_turns {
-                                let _ = db::update_task_max_turns(conn, &task.id, Some(turns));
-                                task.max_turns = Some(turns);
+            let raw = content[abs_start..abs_end].trim();
+            let json_str = strip_code_fences(raw);
+            match serde_json::from_str::<Vec<serde_json::Value>>(json_str) {
+                Ok(items) => {
+                    for item in items {
+                        let title = item
+                            .get("title")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .trim();
+                        let description = item
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .trim();
+                        let normalized_description =
+                            crate::context_generator::normalize_project_local_paths(
+                                description,
+                                project_path,
+                            );
+                        let tag = item.get("tag").and_then(|v| v.as_str());
+                        let model = item.get("model").and_then(|v| v.as_str());
+                        let max_turns = item
+                            .get("max_turns")
+                            .and_then(|v| v.as_i64())
+                            .map(|v| v as i32);
+                        if !title.is_empty() {
+                            if let Ok(mut task) = db::create_task(
+                                conn,
+                                project_id,
+                                title,
+                                &normalized_description,
+                                tag,
+                                model,
+                            ) {
+                                if let Some(turns) = max_turns {
+                                    let _ = db::update_task_max_turns(conn, &task.id, Some(turns));
+                                    task.max_turns = Some(turns);
+                                }
+                                created.push(task);
                             }
-                            created.push(task);
                         }
                     }
+                }
+                Err(e) => {
+                    eprintln!("[do-it-claude] Failed to parse tasks JSON: {e}\nRaw: {json_str}");
                 }
             }
             search_from = abs_end + "</tasks>".len();
@@ -543,13 +789,20 @@ pub struct ChatAttachment {
 }
 
 #[tauri::command]
-pub fn get_project_messages(db: State<DbConn>, project_id: String) -> Result<Vec<ProjectMessage>, String> {
+pub fn get_project_messages(
+    db: State<DbConn>,
+    project_id: String,
+) -> Result<Vec<ProjectMessage>, String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     db::get_project_messages(&conn, &project_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn clear_project_chat(db: State<DbConn>, sessions: State<SessionStore>, project_id: String) -> Result<(), String> {
+pub fn clear_project_chat(
+    db: State<DbConn>,
+    sessions: State<SessionStore>,
+    project_id: String,
+) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     db::clear_project_messages(&conn, &project_id).map_err(|e| e.to_string())?;
     // Clear the session so next message starts fresh
@@ -576,7 +829,8 @@ pub async fn send_project_message(
     let db_conn = db.inner().clone();
     let project = {
         let conn = db_conn.lock().map_err(|e| e.to_string())?;
-        db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
+        db::get_project_by_id(&conn, &project_id)
+            .map_err(|e| e.to_string())?
             .ok_or_else(|| "Project not found".to_string())?
     };
 
@@ -586,13 +840,18 @@ pub async fn send_project_message(
         db::add_project_message(&conn, &project_id, "user", &content).map_err(|e| e.to_string())?
     };
 
-    let _ = app.emit("project-chat-started", ProjectChatStartedPayload {
-        project_id: project_id.clone(),
-    });
+    let _ = app.emit(
+        "project-chat-started",
+        ProjectChatStartedPayload {
+            project_id: project_id.clone(),
+        },
+    );
 
     let provider = {
         let conn = db_conn.lock().map_err(|e| e.to_string())?;
-        db::get_setting(&conn, "cli_provider").map_err(|e| e.to_string())?.unwrap_or_else(|| "claude".to_string())
+        db::get_setting(&conn, "cli_provider")
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| "claude".to_string())
     };
 
     let session_key = format!("project-chat-{}", project_id);
@@ -641,10 +900,16 @@ pub async fn send_project_message(
             }
             let mut parts = Vec::new();
             if !image_paths.is_empty() {
-                parts.push(format!("[The user attached images. Read these files to see them: {}]", image_paths.join(", ")));
+                parts.push(format!(
+                    "[The user attached images. Read these files to see them: {}]",
+                    image_paths.join(", ")
+                ));
             }
             if !doc_paths.is_empty() {
-                parts.push(format!("[The user attached documents. Read these files: {}]", doc_paths.join(", ")));
+                parts.push(format!(
+                    "[The user attached documents. Read these files: {}]",
+                    doc_paths.join(", ")
+                ));
             }
             parts.push(content.clone());
             parts.join("\n\n")
@@ -654,73 +919,30 @@ pub async fn send_project_message(
     } else {
         content.clone()
     };
+    let normalized_prompt_for_codex =
+        crate::context_generator::normalize_project_local_paths(&prompt_for_claude, &project.path);
+    let normalized_system_prompt = project.system_prompt.as_deref().map(|prompt| {
+        crate::context_generator::normalize_project_local_paths(prompt, &project.path)
+    });
+
+    let codex_output_file = if provider == "codex" {
+        Some(new_codex_output_file())
+    } else {
+        None
+    };
 
     let mut cmd = tokio::process::Command::new(&cli_bin);
 
     if provider == "codex" {
-        cmd.arg("exec")
-            .arg("--yolo")
-            .arg("--json")
-            .arg("-C")
-            .arg(&project.path);
-
-        let mut context_parts: Vec<String> = Vec::new();
-        context_parts.push(r#"You are a planning assistant for a coding task queue. Your job is to help the user plan work and break it into executable tasks.
-
-## How to work
-1. When the user describes what they want, ask clarifying questions if needed
-2. **Read the relevant source files** to understand current implementation — always reference specific file paths, function names, and line numbers
-3. Break the work into concrete, independently executable tasks
-4. Output the tasks in a structured block so they get auto-created in the queue
-
-## Creating tasks
-When you have a clear plan, output tasks inside a <tasks> XML tag as a JSON array. Each task needs:
-- "title": Short imperative title (e.g. "Add user auth middleware")
-- "description": The full prompt that will be sent to Codex CLI for execution. **CRITICAL: Always include specific file paths, function/class names, current behavior, and expected behavior.** Specific prompts drastically reduce token usage because the CLI doesn't need to explore the codebase. Bad: "Add validation to the form". Good: "In src/components/SignupForm.vue, add email validation to the handleSubmit() function (line ~45). Currently it submits without checking format. Add a regex check and show an inline error message below the email input."
-- "tag": One of "bug", "feature", "update", "refactor", "docs", "misc"
-- "model": Which model to use. Pick based on task complexity:
-  - "gpt-5.4-mini" — for straightforward tasks: simple bug fixes, docs, small refactors, config changes, renaming, formatting
-  - "gpt-5.4" — for complex tasks: multi-file features, architecture changes, tricky bugs, tasks requiring deep reasoning
-  Default to gpt-5.4-mini unless the task genuinely requires deep reasoning.
-- "max_turns": How many agentic turns to allow. Estimate based on scope:
-  - 2-3: Trivial — single file edit, rename, typo fix
-  - 5-8: Small — one feature, one bug fix
-  - 10-15: Medium — multi-file feature
-  - 20-25: Large — major feature with tests
-- "max_tokens": Maximum output tokens. Estimate based on code volume:
-  - 4096: Small edits
-  - 8192: Single file
-  - 16384: Multi-file (default)
-  - 32000: Large implementations
-
-Example:
-<tasks>
-[
-  {"title": "Add input validation to signup form", "description": "In src/components/SignupForm.vue, add validation for the email and password fields.", "tag": "feature", "model": "gpt-5.4-mini", "max_turns": 5, "max_tokens": 8192},
-  {"title": "Implement OAuth2 login flow", "description": "Add Google OAuth2 authentication with auth service, callback handler, and token storage.", "tag": "feature", "model": "gpt-5.4", "max_turns": 15, "max_tokens": 16384}
-]
-</tasks>
-
-Tasks are created in the queue immediately when you output this block. Keep your planning responses concise."#.to_string());
-        if let Some(ref prompt) = project.system_prompt {
-            if !prompt.trim().is_empty() {
-                context_parts.push(prompt.clone());
-            }
-        }
-        cmd.arg("-c").arg(format!("developer_instructions={}", context_parts.join("\n\n")));
-
-        // Prompt must come last for codex exec
-        cmd.arg(&prompt_for_claude);
-    } else {
-        cmd.arg("-p")
-            .arg(&prompt_for_claude)
-            .arg("--dangerously-skip-permissions")
-            .arg("--output-format")
-            .arg("stream-json");
-
         if let Some(ref sid) = existing_session {
-            cmd.arg("--resume").arg(sid);
+            cmd.arg("exec").arg("resume").arg(sid).arg("--json");
         } else {
+            cmd.arg("exec")
+                .arg("--yolo")
+                .arg("--json")
+                .arg("-C")
+                .arg(&project.path);
+
             let mut context_parts: Vec<String> = Vec::new();
             context_parts.push(r#"You are a planning assistant for a coding task queue. Your job is to help the user plan work and break it into executable tasks.
 
@@ -733,32 +955,87 @@ Tasks are created in the queue immediately when you output this block. Keep your
 ## Creating tasks
 When you have a clear plan, output tasks inside a <tasks> XML tag as a JSON array. Each task needs:
 - "title": Short imperative title (e.g. "Add user auth middleware")
+- "description": The full prompt that will be sent to Codex CLI for execution. **CRITICAL: Always include specific file paths, function/class names, current behavior, and expected behavior.** Specific prompts drastically reduce token usage because the CLI doesn't need to explore the codebase. Bad: "Add validation to the form". Good: "In src/components/SignupForm.vue, add email validation to the handleSubmit() function (line ~45). Currently it submits without checking format. Add a regex check and show an inline error message below the email input."
+- "tag": One of "bug", "feature", "update", "refactor", "docs", "misc"
+        - "model": Which model to use. Pick based on task complexity:
+          - "gpt-5.4-mini" — for straightforward tasks: simple bug fixes, docs, small refactors, config changes, renaming, formatting
+          - "gpt-5.4" — for complex tasks: multi-file features, architecture changes, tricky bugs, tasks requiring deep reasoning
+          Default to gpt-5.4-mini unless the task genuinely requires deep reasoning.
+
+Example:
+<tasks>
+[
+          {"title": "Add input validation to signup form", "description": "In src/components/SignupForm.vue, add validation for the email and password fields.", "tag": "feature", "model": "gpt-5.4-mini"},
+          {"title": "Implement OAuth2 login flow", "description": "Add Google OAuth2 authentication with auth service, callback handler, and token storage.", "tag": "feature", "model": "gpt-5.4"}
+        ]
+        </tasks>
+
+Tasks are created in the queue immediately when you output this block. Keep your planning responses concise."#.to_string());
+            if let Some(ref prompt) = normalized_system_prompt {
+                if !prompt.trim().is_empty() {
+                    context_parts.push(prompt.clone());
+                }
+            }
+            cmd.arg("-c").arg(format!(
+                "developer_instructions={}",
+                context_parts.join("\n\n")
+            ));
+        }
+
+        if let Some(ref path) = codex_output_file {
+            cmd.arg("--output-last-message").arg(path);
+        }
+
+        // Prompt must come last for codex exec
+        cmd.arg(&normalized_prompt_for_codex);
+    } else {
+        cmd.arg("-p")
+            .arg(&prompt_for_claude)
+            .arg("--dangerously-skip-permissions")
+            .arg("--output-format")
+            .arg("stream-json")
+            .arg("--verbose");
+
+        if let Some(ref sid) = existing_session {
+            cmd.arg("--resume").arg(sid);
+        } else {
+            let mut context_parts: Vec<String> = Vec::new();
+            context_parts.push(r#"You are a planning assistant for a coding task queue. Your job is to help the user plan work and break it into executable tasks.
+
+## How to work
+1. When the user describes work they want done, immediately create tasks — only ask clarifying questions if the request is genuinely impossible to interpret
+2. **Read the relevant source files** to understand current implementation — always reference specific file paths, function names, and line numbers
+3. Break the work into concrete, independently executable tasks
+4. Output the tasks in a structured block so they get auto-created in the queue
+
+## Creating tasks
+When you have a clear plan, output tasks inside a <tasks> XML tag as a JSON array. Each task needs:
+- "title": Short imperative title (e.g. "Add user auth middleware")
 - "description": The full prompt that will be sent to Claude Code for execution. **CRITICAL: Always include specific file paths, function/class names, current behavior, and expected behavior.** Specific prompts drastically reduce token usage because Claude doesn't need to explore the codebase. Bad: "Add validation to the form". Good: "In src/components/SignupForm.vue, add email validation to the handleSubmit() function (line ~45). Currently it submits without checking format. Add a regex check and show an inline error message below the email input."
 - "tag": One of "bug", "feature", "update", "refactor", "docs", "misc"
 - "model": Which Claude model to use. Pick based on task complexity:
-  - "claude-sonnet-4-20250514" — for straightforward tasks: simple bug fixes, docs, small refactors, config changes, renaming, formatting
-  - "claude-opus-4-20250414" — for complex tasks: multi-file features, architecture changes, tricky bugs, tasks requiring deep reasoning
+  - "claude-sonnet-4-6" — for straightforward tasks: simple bug fixes, docs, small refactors, config changes, renaming, formatting
+  - "claude-opus-4-6" — for complex tasks: multi-file features, architecture changes, tricky bugs, tasks requiring deep reasoning
   Default to sonnet unless the task genuinely requires deep reasoning.
 - "max_turns": How many agentic turns Claude gets (each turn = one tool call). Estimate based on scope:
   - 2-3: Trivial — single file edit, rename, typo fix
   - 5-8: Small — one feature, one bug fix, tests for one module
   - 10-15: Medium — multi-file feature, refactor across files
   - 20-25: Large — major feature with tests, broad refactor
-- "max_tokens": Maximum output tokens per response. Estimate based on how much code Claude needs to write:
-  - 4096: Small edits, config changes, docs
-  - 8192: Single file implementation
-  - 16384: Multi-file feature (default — good for most tasks)
-  - 32000: Large implementations with lots of new code
 
 Example:
 <tasks>
 [
-  {"title": "Add input validation to signup form", "description": "In src/components/SignupForm.vue, add validation for the email and password fields. Email must be a valid format. Password must be at least 8 characters with one number. Show inline error messages below each field.", "tag": "feature", "model": "claude-sonnet-4-20250514", "max_turns": 5, "max_tokens": 8192},
-  {"title": "Implement OAuth2 login flow", "description": "Add Google OAuth2 authentication. Create the auth service, callback handler, token storage, and integrate with the existing user system. Update the login page with a 'Sign in with Google' button.", "tag": "feature", "model": "claude-opus-4-20250414", "max_turns": 15, "max_tokens": 16384}
+  {"title": "Add input validation to signup form", "description": "In src/components/SignupForm.vue, add validation for the email and password fields. Email must be a valid format. Password must be at least 8 characters with one number. Show inline error messages below each field.", "tag": "feature", "model": "claude-sonnet-4-6", "max_turns": 5},
+  {"title": "Implement OAuth2 login flow", "description": "Add Google OAuth2 authentication. Create the auth service, callback handler, token storage, and integrate with the existing user system. Update the login page with a 'Sign in with Google' button.", "tag": "feature", "model": "claude-opus-4-6", "max_turns": 15}
 ]
 </tasks>
 
 Tasks are created in the queue immediately when you output this block. You can output tasks at any point in the conversation — if the user refines requirements, output a new <tasks> block with additional tasks.
+
+For multi-part ideas, output ALL tasks in a single <tasks> block. Do not split across messages.
+
+IMPORTANT: Output the JSON array directly inside <tasks>...</tasks> with no markdown code fences (no ```json). Just raw JSON.
 
 Keep your planning responses concise. Focus on understanding requirements and producing good task definitions."#.to_string());
             if let Some(ref prompt) = project.system_prompt {
@@ -766,7 +1043,8 @@ Keep your planning responses concise. Focus on understanding requirements and pr
                     context_parts.push(prompt.clone());
                 }
             }
-            cmd.arg("--append-system-prompt").arg(context_parts.join("\n\n"));
+            cmd.arg("--append-system-prompt")
+                .arg(context_parts.join("\n\n"));
         }
     }
 
@@ -779,8 +1057,14 @@ Keep your planning responses concise. Focus on understanding requirements and pr
     }
 
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    let stdout = child.stdout.take().ok_or_else(|| "Failed to capture stdout".to_string())?;
-    let stderr = child.stderr.take().ok_or_else(|| "Failed to capture stderr".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture stderr".to_string())?;
 
     let app_stdout = app.clone();
     let sessions_stdout = sessions.inner().clone();
@@ -789,6 +1073,7 @@ Keep your planning responses concise. Focus on understanding requirements and pr
     let provider_stdout = provider.clone();
     let stdout_handle = tokio::spawn(async move {
         let mut full_response = String::new();
+        let mut result_for_tasks = String::new();
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
 
@@ -796,22 +1081,32 @@ Keep your planning responses concise. Focus on understanding requirements and pr
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
                 let event_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 if provider_stdout == "codex" {
+                    if let Some(sid) = codex_thread_id(&json) {
+                        let mut store = sessions_stdout.lock().unwrap();
+                        store.insert(session_key_clone.clone(), sid.to_string());
+                    }
                     if event_type.contains("output_text.delta") {
                         if let Some(delta) = json.get("delta").and_then(|v| v.as_str()) {
                             full_response.push_str(delta);
-                            let _ = app_stdout.emit("project-chat-chunk", ProjectChatChunkPayload {
-                                project_id: project_id_stdout.clone(),
-                                content: delta.to_string(),
-                            });
+                            let _ = app_stdout.emit(
+                                "project-chat-chunk",
+                                ProjectChatChunkPayload {
+                                    project_id: project_id_stdout.clone(),
+                                    content: delta.to_string(),
+                                },
+                            );
                         }
                     } else if event_type.contains("output_text.done") {
                         if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
                             if full_response.is_empty() {
                                 full_response.push_str(text);
-                                let _ = app_stdout.emit("project-chat-chunk", ProjectChatChunkPayload {
-                                    project_id: project_id_stdout.clone(),
-                                    content: text.to_string(),
-                                });
+                                let _ = app_stdout.emit(
+                                    "project-chat-chunk",
+                                    ProjectChatChunkPayload {
+                                        project_id: project_id_stdout.clone(),
+                                        content: text.to_string(),
+                                    },
+                                );
                             }
                         }
                     }
@@ -826,20 +1121,33 @@ Keep your planning responses concise. Focus on understanding requirements and pr
                         "assistant" => {
                             for chunk in extract_assistant_text(&json) {
                                 full_response.push_str(&chunk);
-                                let _ = app_stdout.emit("project-chat-chunk", ProjectChatChunkPayload {
-                                    project_id: project_id_stdout.clone(),
-                                    content: chunk,
-                                });
+                                let _ = app_stdout.emit(
+                                    "project-chat-chunk",
+                                    ProjectChatChunkPayload {
+                                        project_id: project_id_stdout.clone(),
+                                        content: chunk,
+                                    },
+                                );
                             }
                         }
                         "result" => {
-                            if full_response.is_empty() {
-                                if let Some(result_text) = json.get("result").and_then(|v| v.as_str()) {
-                                    full_response.push_str(result_text);
-                                    let _ = app_stdout.emit("project-chat-chunk", ProjectChatChunkPayload {
-                                        project_id: project_id_stdout.clone(),
-                                        content: result_text.to_string(),
-                                    });
+                            if let Some(rt) = json.get("result").and_then(|v| v.as_str()) {
+                                if !rt.is_empty() {
+                                    result_for_tasks = rt.to_string();
+                                }
+                                if full_response.is_empty() {
+                                    if let Some(result_text) =
+                                        json.get("result").and_then(|v| v.as_str())
+                                    {
+                                        full_response.push_str(result_text);
+                                        let _ = app_stdout.emit(
+                                            "project-chat-chunk",
+                                            ProjectChatChunkPayload {
+                                                project_id: project_id_stdout.clone(),
+                                                content: result_text.to_string(),
+                                            },
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -849,7 +1157,7 @@ Keep your planning responses concise. Focus on understanding requirements and pr
             }
         }
 
-        full_response
+        (full_response, result_for_tasks)
     });
 
     let stderr_handle = tokio::spawn(async move {
@@ -863,7 +1171,8 @@ Keep your planning responses concise. Focus on understanding requirements and pr
     });
 
     let status = child.wait().await.map_err(|e| e.to_string())?;
-    let assistant_content = stdout_handle.await.map_err(|e| e.to_string())?;
+    let (mut assistant_content, result_for_tasks) =
+        stdout_handle.await.map_err(|e| e.to_string())?;
     let stderr_output = stderr_handle.await.map_err(|e| e.to_string())?;
 
     // Clean up temp image files
@@ -871,48 +1180,98 @@ Keep your planning responses concise. Focus on understanding requirements and pr
         let _ = std::fs::remove_file(path);
     }
 
+    if assistant_content.trim().is_empty() {
+        if let Some(ref path) = codex_output_file {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if !text.trim().is_empty() {
+                    assistant_content = text;
+                }
+            }
+        }
+    }
+
+    if let Some(ref path) = codex_output_file {
+        let _ = std::fs::remove_file(path);
+    }
+
     if !status.success() {
         let error = stderr_output.join("\n").trim().to_string();
-        let error = if error.is_empty() { "Claude chat failed".to_string() } else { error };
-        let _ = app.emit("project-chat-failed", ProjectChatFailedPayload {
-            project_id,
-            error: error.clone(),
-        });
+        let error = if error.is_empty() {
+            format!(
+                "{} chat failed",
+                if provider == "codex" {
+                    "Codex"
+                } else {
+                    "Claude"
+                }
+            )
+        } else {
+            error
+        };
+        let _ = app.emit(
+            "project-chat-failed",
+            ProjectChatFailedPayload {
+                project_id,
+                error: error.clone(),
+            },
+        );
         return Err(error);
     }
 
     let final_content = assistant_content.trim().to_string();
     if final_content.is_empty() {
-        let error = "Claude returned an empty response".to_string();
-        let _ = app.emit("project-chat-failed", ProjectChatFailedPayload {
-            project_id,
-            error: error.clone(),
-        });
+        let error = format!(
+            "{} returned an empty response",
+            if provider == "codex" {
+                "Codex"
+            } else {
+                "Claude"
+            }
+        );
+        let _ = app.emit(
+            "project-chat-failed",
+            ProjectChatFailedPayload {
+                project_id,
+                error: error.clone(),
+            },
+        );
         return Err(error);
     }
 
     let assistant_message = {
         let conn = db_conn.lock().map_err(|e| e.to_string())?;
-        db::add_project_message(&conn, &project_id, "assistant", &final_content).map_err(|e| e.to_string())?
+        db::add_project_message(&conn, &project_id, "assistant", &final_content)
+            .map_err(|e| e.to_string())?
     };
 
     // Parse <tasks> blocks and auto-create tasks in the queue
     let created_tasks = {
         let conn = db_conn.lock().map_err(|e| e.to_string())?;
-        parse_and_create_tasks(&conn, &project_id, &final_content)
+        let parse_content = if !result_for_tasks.is_empty() {
+            &result_for_tasks
+        } else {
+            final_content.as_str()
+        };
+        parse_and_create_tasks(&conn, &project_id, &project.path, parse_content)
     };
 
     if !created_tasks.is_empty() {
-        let _ = app.emit("tasks-created", TasksCreatedPayload {
-            project_id: project_id.clone(),
-            tasks: created_tasks,
-        });
+        let _ = app.emit(
+            "tasks-created",
+            TasksCreatedPayload {
+                project_id: project_id.clone(),
+                tasks: created_tasks,
+            },
+        );
     }
 
-    let _ = app.emit("project-chat-completed", ProjectChatCompletedPayload {
-        project_id: project_id.clone(),
-        message: assistant_message.clone(),
-    });
+    let _ = app.emit(
+        "project-chat-completed",
+        ProjectChatCompletedPayload {
+            project_id: project_id.clone(),
+            message: assistant_message.clone(),
+        },
+    );
 
     Ok(assistant_message)
 }
@@ -934,10 +1293,14 @@ pub fn check_claude() -> ClaudeStatus {
         .arg("--version")
         .output()
         .ok()
-        .and_then(|o| if o.status.success() {
-            String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
-        } else {
-            None
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+            } else {
+                None
+            }
         })
         .unwrap_or_default();
 
@@ -965,10 +1328,14 @@ pub fn check_codex() -> ClaudeStatus {
         .arg("--version")
         .output()
         .ok()
-        .and_then(|o| if o.status.success() {
-            String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
-        } else {
-            None
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+            } else {
+                None
+            }
         })
         .unwrap_or_default();
 
@@ -1029,10 +1396,7 @@ pub fn resize_pty(
 }
 
 #[tauri::command]
-pub fn close_pty(
-    sessions: State<PtySessions>,
-    session_id: String,
-) -> Result<(), String> {
+pub fn close_pty(sessions: State<PtySessions>, session_id: String) -> Result<(), String> {
     pty::close_pty(&sessions, &session_id)
 }
 
@@ -1057,10 +1421,14 @@ pub fn get_git_info(path: String) -> Result<GitInfo, String> {
         .current_dir(&path)
         .output()
         .map_err(|e| e.to_string())
-        .and_then(|o| if o.status.success() {
-            String::from_utf8(o.stdout).map(|s| s.trim().to_string()).map_err(|e| e.to_string())
-        } else {
-            Ok(String::from("unknown"))
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout)
+                    .map(|s| s.trim().to_string())
+                    .map_err(|e| e.to_string())
+            } else {
+                Ok(String::from("unknown"))
+            }
         })?;
 
     // Count changes
@@ -1096,22 +1464,38 @@ pub fn get_git_info(path: String) -> Result<GitInfo, String> {
         })
         .unwrap_or_default();
 
-    Ok(GitInfo { branch, changes, commits })
+    Ok(GitInfo {
+        branch,
+        changes,
+        commits,
+    })
 }
 
 fn open_folder(dir: &std::path::Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    std::process::Command::new("open").arg(dir).spawn().map_err(|e| e.to_string())?;
+    std::process::Command::new("open")
+        .arg(dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
     #[cfg(target_os = "linux")]
-    std::process::Command::new("xdg-open").arg(dir).spawn().map_err(|e| e.to_string())?;
+    std::process::Command::new("xdg-open")
+        .arg(dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
     #[cfg(target_os = "windows")]
-    std::process::Command::new("explorer").arg(dir).spawn().map_err(|e| e.to_string())?;
+    std::process::Command::new("explorer")
+        .arg(dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn list_presets(app_handle: AppHandle) -> Result<Vec<String>, String> {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     crate::mode_manager::list_presets(&app_dir)
 }
 
@@ -1122,34 +1506,59 @@ pub fn list_templates(app_handle: AppHandle) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub fn load_preset(app_handle: AppHandle, db: State<DbConn>, project_id: String, preset_name: String) -> Result<(), String> {
+pub fn load_preset(
+    app_handle: AppHandle,
+    db: State<DbConn>,
+    project_id: String,
+    preset_name: String,
+) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
-    let project = db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
+    let project = db::get_project_by_id(&conn, &project_id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "Project not found".to_string())?;
     let project_path = std::path::Path::new(&project.path);
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     crate::mode_manager::load_preset(&app_dir, &project_id, project_path, &preset_name)
 }
 
 // Backward-compatible command aliases for the existing frontend wiring.
 #[tauri::command]
-pub fn load_template(app_handle: AppHandle, db: State<DbConn>, project_id: String, template_name: String) -> Result<(), String> {
+pub fn load_template(
+    app_handle: AppHandle,
+    db: State<DbConn>,
+    project_id: String,
+    template_name: String,
+) -> Result<(), String> {
     load_preset(app_handle, db, project_id, template_name)
 }
 
 #[tauri::command]
-pub fn restore_project_backup(app_handle: AppHandle, db: State<DbConn>, project_id: String) -> Result<(), String> {
+pub fn restore_project_backup(
+    app_handle: AppHandle,
+    db: State<DbConn>,
+    project_id: String,
+) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
-    let project = db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
+    let project = db::get_project_by_id(&conn, &project_id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "Project not found".to_string())?;
     let project_path = std::path::Path::new(&project.path);
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     crate::mode_manager::restore_backup(&app_dir, &project_id, project_path)
 }
 
 #[tauri::command]
 pub fn open_presets_folder(app_handle: AppHandle) -> Result<(), String> {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     let dir = app_dir.join("presets");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     open_folder(&dir)
@@ -1163,37 +1572,64 @@ pub fn open_templates_folder(app_handle: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn list_skills(app_handle: AppHandle) -> Result<Vec<String>, String> {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     crate::mode_manager::list_skills(&app_dir)
 }
 
 #[tauri::command]
 pub fn list_agents(app_handle: AppHandle) -> Result<Vec<String>, String> {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     crate::mode_manager::list_agents(&app_dir)
 }
 
 #[tauri::command]
-pub fn install_skill(app_handle: AppHandle, db: State<DbConn>, project_id: String, skill_name: String) -> Result<(), String> {
+pub fn install_skill(
+    app_handle: AppHandle,
+    db: State<DbConn>,
+    project_id: String,
+    skill_name: String,
+) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
-    let project = db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
+    let project = db::get_project_by_id(&conn, &project_id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "Project not found".to_string())?;
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     crate::mode_manager::install_skill(&app_dir, std::path::Path::new(&project.path), &skill_name)
 }
 
 #[tauri::command]
-pub fn install_agent(app_handle: AppHandle, db: State<DbConn>, project_id: String, agent_name: String) -> Result<(), String> {
+pub fn install_agent(
+    app_handle: AppHandle,
+    db: State<DbConn>,
+    project_id: String,
+    agent_name: String,
+) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
-    let project = db::get_project_by_id(&conn, &project_id).map_err(|e| e.to_string())?
+    let project = db::get_project_by_id(&conn, &project_id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "Project not found".to_string())?;
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     crate::mode_manager::install_agent(&app_dir, std::path::Path::new(&project.path), &agent_name)
 }
 
 #[tauri::command]
 pub fn open_skills_folder(app_handle: AppHandle) -> Result<(), String> {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     let dir = app_dir.join("skills");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     open_folder(&dir)
@@ -1201,15 +1637,25 @@ pub fn open_skills_folder(app_handle: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_agents_folder(app_handle: AppHandle) -> Result<(), String> {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     let dir = app_dir.join("agents");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     open_folder(&dir)
 }
 
 #[tauri::command]
-pub fn import_claude_file(app_handle: AppHandle, file_path: String, file_type: String) -> Result<String, String> {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+pub fn import_claude_file(
+    app_handle: AppHandle,
+    file_path: String,
+    file_type: String,
+) -> Result<String, String> {
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
     let dest_dir = match file_type.as_str() {
         "skill" => app_dir.join("skills"),
         "agent" => app_dir.join("agents"),
@@ -1217,7 +1663,8 @@ pub fn import_claude_file(app_handle: AppHandle, file_path: String, file_type: S
     };
     std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
     let src = std::path::Path::new(&file_path);
-    let filename = src.file_name()
+    let filename = src
+        .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| "Invalid file path".to_string())?;
     let dest = dest_dir.join(filename);
@@ -1226,11 +1673,15 @@ pub fn import_claude_file(app_handle: AppHandle, file_path: String, file_type: S
 }
 
 #[tauri::command]
-pub fn update_project_system_prompt(db: State<DbConn>, id: String, system_prompt: Option<String>) -> Result<(), String> {
+pub fn update_project_system_prompt(
+    db: State<DbConn>,
+    id: String,
+    system_prompt: Option<String>,
+) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
-    db::update_project_system_prompt(&conn, &id, system_prompt.as_deref()).map_err(|e| e.to_string())
+    db::update_project_system_prompt(&conn, &id, system_prompt.as_deref())
+        .map_err(|e| e.to_string())
 }
-
 
 #[tauri::command]
 pub fn get_templates(db: State<DbConn>) -> Result<Vec<PromptTemplate>, String> {
@@ -1239,13 +1690,22 @@ pub fn get_templates(db: State<DbConn>) -> Result<Vec<PromptTemplate>, String> {
 }
 
 #[tauri::command]
-pub fn create_template(db: State<DbConn>, name: String, content: String) -> Result<PromptTemplate, String> {
+pub fn create_template(
+    db: State<DbConn>,
+    name: String,
+    content: String,
+) -> Result<PromptTemplate, String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     db::create_template(&conn, &name, &content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn update_template(db: State<DbConn>, id: String, name: String, content: String) -> Result<PromptTemplate, String> {
+pub fn update_template(
+    db: State<DbConn>,
+    id: String,
+    name: String,
+    content: String,
+) -> Result<PromptTemplate, String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     db::update_template(&conn, &id, &name, &content).map_err(|e| e.to_string())
 }
@@ -1257,23 +1717,26 @@ pub fn delete_template(db: State<DbConn>, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn update_task_max_turns(db: State<DbConn>, id: String, max_turns: Option<i32>) -> Result<Task, String> {
+pub fn update_task_max_turns(
+    db: State<DbConn>,
+    id: String,
+    max_turns: Option<i32>,
+) -> Result<Task, String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     db::update_task_max_turns(&conn, &id, max_turns).map_err(|e| e.to_string())?;
-    db::get_task_by_id(&conn, &id).map_err(|e| e.to_string())?
+    db::get_task_by_id(&conn, &id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "Task not found".to_string())
 }
 
 #[tauri::command]
-pub fn update_task_model(db: State<DbConn>, id: String, model: Option<String>) -> Result<Task, String> {
+pub fn update_task_model(
+    db: State<DbConn>,
+    id: String,
+    model: Option<String>,
+) -> Result<Task, String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     db::update_task_model(&conn, &id, model.as_deref()).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn update_task_max_tokens(db: State<DbConn>, id: String, max_tokens: Option<i32>) -> Result<Task, String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
-    db::update_task_max_tokens(&conn, &id, max_tokens).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1291,14 +1754,17 @@ pub struct TokenEstimate {
 #[tauri::command]
 pub fn estimate_task_tokens(db: State<DbConn>, task_id: String) -> Result<TokenEstimate, String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
-    let task = db::get_task_by_id(&conn, &task_id).map_err(|e| e.to_string())?
+    let task = db::get_task_by_id(&conn, &task_id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "Task not found".to_string())?;
-    let project = db::get_project_by_id(&conn, &task.project_id).map_err(|e| e.to_string())?
+    let project = db::get_project_by_id(&conn, &task.project_id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| "Project not found".to_string())?;
 
     let chars_per_token = 4;
     let prompt_tokens = task.description.len() / chars_per_token;
-    let system_tokens = project.system_prompt
+    let system_tokens = project
+        .system_prompt
         .as_ref()
         .map(|s| s.len() / chars_per_token)
         .unwrap_or(0);

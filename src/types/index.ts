@@ -31,7 +31,6 @@ export interface Task {
   exit_code: number | null
   max_turns: number | null
   model: string | null
-  max_tokens: number | null
   input_tokens: number | null
   output_tokens: number | null
   provider: string | null

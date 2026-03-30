@@ -2,7 +2,6 @@
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useChatStore } from '../stores/chatStore'
 import { useTaskStore } from '../stores/taskStore'
-import type { ProjectMessage } from '../types'
 
 const props = defineProps<{ projectId: string }>()
 
@@ -129,12 +128,6 @@ function handleKeydown(e: KeyboardEvent) {
   }
 }
 
-function prefillTask(msg: ProjectMessage) {
-  taskDescription.value = msg.content
-  taskTitle.value = ''
-  showTaskForm.value = true
-}
-
 async function createTask() {
   if (!taskTitle.value.trim()) return
   await taskStore.createTask(props.projectId, taskTitle.value.trim(), taskDescription.value.trim())
@@ -153,7 +146,26 @@ interface ParsedTask {
   tag: string
   model?: string
   max_turns?: number
-  max_tokens?: number
+}
+
+function formatModelLabel(model?: string): string {
+  if (!model) return ''
+  if (model === 'gpt-5.4') return 'GPT-5.4'
+  if (model === 'gpt-5.4-mini') return 'GPT-5.4 Mini'
+  if (model.includes('opus')) return 'Opus'
+  if (model.includes('sonnet')) return 'Sonnet'
+  return model
+}
+
+function stripCodeFences(s: string): string {
+  s = s.trim()
+  if (s.startsWith('```')) {
+    const newline = s.indexOf('\n')
+    s = newline !== -1 ? s.slice(newline + 1) : s.slice(3)
+    s = s.trim()
+  }
+  if (s.endsWith('```')) s = s.slice(0, -3).trim()
+  return s
 }
 
 function parseMessage(content: string): { text: string; tasks: ParsedTask[] } {
@@ -163,7 +175,7 @@ function parseMessage(content: string): { text: string; tasks: ParsedTask[] } {
   let match
   while ((match = regex.exec(content)) !== null) {
     try {
-      const parsed = JSON.parse(match[1].trim())
+      const parsed = JSON.parse(stripCodeFences(match[1].trim()))
       if (Array.isArray(parsed)) {
         tasks.push(...parsed)
       }
@@ -216,13 +228,22 @@ function parseMessage(content: string): { text: string; tasks: ParsedTask[] } {
                 <span v-if="t.tag" class="msg-task-tag">{{ t.tag }}</span>
                 <span class="msg-task-title">{{ t.title }}</span>
                 <span class="task-meta" v-if="t.model || t.max_turns">
-                  {{ t.model?.includes('opus') ? 'Opus' : 'Sonnet' }} · {{ t.max_turns || 'auto' }} turns
+                  {{ t.model ? formatModelLabel(t.model) : 'Auto model' }}<template v-if="t.max_turns"> · {{ t.max_turns }} turns</template>
                 </span>
               </div>
             </div>
           </div>
         </div>
       </template>
+
+      <!-- Thinking indicator (before streaming starts) -->
+      <div v-if="isSending && !draft" class="chat-msg chat-msg-assistant">
+        <div class="msg-bubble msg-thinking">
+          <span class="thinking-dot"></span>
+          <span class="thinking-dot"></span>
+          <span class="thinking-dot"></span>
+        </div>
+      </div>
 
       <!-- Streaming draft -->
       <div v-if="draft" class="chat-msg chat-msg-assistant">
@@ -467,6 +488,27 @@ function parseMessage(content: string): { text: string; tasks: ParsedTask[] } {
   margin-left: 2px;
 }
 @keyframes blink { 0%, 100% { opacity: 0.7; } 50% { opacity: 0; } }
+
+.msg-thinking {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 14px;
+}
+.thinking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #a78bfa;
+  animation: thinking-bounce 1.2s ease-in-out infinite;
+  opacity: 0.5;
+}
+.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes thinking-bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  40% { transform: translateY(-5px); opacity: 1; }
+}
 
 .msg-actions {
   display: flex;

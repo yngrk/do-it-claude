@@ -1,8 +1,8 @@
-use rusqlite::{Connection, Result, params};
+use chrono::Utc;
+use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
-use chrono::Utc;
 
 const DEFAULT_CLAUDE_MD: &str = r#"# AI Dev Team — Engineering Manager
 
@@ -161,7 +161,6 @@ pub struct Task {
     pub exit_code: Option<i32>,
     pub max_turns: Option<i32>,
     pub model: Option<String>,
-    pub max_tokens: Option<i32>,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub provider: Option<String>,
@@ -211,10 +210,9 @@ pub struct ProjectMessage {
 pub type DbConn = Arc<Mutex<Connection>>;
 
 const TASK_SELECT_COLUMNS: &str =
-    "id, project_id, title, description, tag, status, sort_order, exit_code, max_turns, model, max_tokens, input_tokens, output_tokens, provider, created_at, started_at, completed_at, updated_at";
+    "id, project_id, title, description, tag, status, sort_order, exit_code, max_turns, model, input_tokens, output_tokens, provider, created_at, started_at, completed_at, updated_at";
 
-const PROJECT_SELECT_COLUMNS: &str =
-    "id, name, path, created_at, system_prompt, mode_id";
+const PROJECT_SELECT_COLUMNS: &str = "id, name, path, created_at, system_prompt, mode_id";
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     Ok(Task {
@@ -228,14 +226,13 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         exit_code: row.get(7)?,
         max_turns: row.get(8)?,
         model: row.get(9)?,
-        max_tokens: row.get(10)?,
-        input_tokens: row.get(11)?,
-        output_tokens: row.get(12)?,
-        provider: row.get(13)?,
-        created_at: row.get(14)?,
-        started_at: row.get(15)?,
-        completed_at: row.get(16)?,
-        updated_at: row.get(17)?,
+        input_tokens: row.get(10)?,
+        output_tokens: row.get(11)?,
+        provider: row.get(12)?,
+        created_at: row.get(13)?,
+        started_at: row.get(14)?,
+        completed_at: row.get(15)?,
+        updated_at: row.get(16)?,
     })
 }
 
@@ -254,7 +251,8 @@ pub fn init_db(app_dir: &std::path::Path) -> Result<Connection> {
     let db_path = app_dir.join("do-it-claude.db");
     let conn = Connection::open(db_path)?;
 
-    conn.execute_batch("
+    conn.execute_batch(
+        "
         CREATE TABLE IF NOT EXISTS projects (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -306,7 +304,8 @@ pub fn init_db(app_dir: &std::path::Path) -> Result<Connection> {
             content TEXT NOT NULL,
             FOREIGN KEY (mode_id) REFERENCES prompt_templates(id) ON DELETE CASCADE
         );
-    ")?;
+    ",
+    )?;
 
     // Migration: add tag column to existing databases
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN tag TEXT", []);
@@ -328,15 +327,15 @@ pub fn init_db(app_dir: &std::path::Path) -> Result<Connection> {
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN input_tokens INTEGER", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN output_tokens INTEGER", []);
 
-    // Migration: add model and max_tokens to tasks
+    // Migration: add model to tasks
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN model TEXT", []);
-    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN max_tokens INTEGER", []);
 
     // Migration: add provider to tasks (tracks which CLI executed the task)
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN provider TEXT", []);
 
     // Migration: create project_messages table
-    let _ = conn.execute_batch("
+    let _ = conn.execute_batch(
+        "
         CREATE TABLE IF NOT EXISTS project_messages (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
@@ -345,22 +344,26 @@ pub fn init_db(app_dir: &std::path::Path) -> Result<Connection> {
             created_at TEXT NOT NULL,
             FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
         );
-    ");
+    ",
+    );
 
     // Migration: create app_settings table
-    let _ = conn.execute_batch("
+    let _ = conn.execute_batch(
+        "
         CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-    ");
+    ",
+    );
 
     // Seed default mode if not present
-    let has_default: bool = conn.query_row(
-        "SELECT COUNT(*) FROM prompt_templates",
-        [],
-        |row| row.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
+    let has_default: bool = conn
+        .query_row("SELECT COUNT(*) FROM prompt_templates", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap_or(0)
+        > 0;
 
     if !has_default {
         let mode_id = Uuid::new_v4().to_string();
@@ -407,13 +410,21 @@ pub fn create_project(conn: &Connection, name: &str, path: &str) -> Result<Proje
 }
 
 pub fn get_projects(conn: &Connection) -> Result<Vec<Project>> {
-    let mut stmt = conn.prepare(&format!("SELECT {} FROM projects ORDER BY created_at DESC", PROJECT_SELECT_COLUMNS))?;
-    let projects = stmt.query_map([], row_to_project)?.collect::<Result<Vec<_>>>()?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM projects ORDER BY created_at DESC",
+        PROJECT_SELECT_COLUMNS
+    ))?;
+    let projects = stmt
+        .query_map([], row_to_project)?
+        .collect::<Result<Vec<_>>>()?;
     Ok(projects)
 }
 
 pub fn get_project_by_id(conn: &Connection, id: &str) -> Result<Option<Project>> {
-    let mut stmt = conn.prepare(&format!("SELECT {} FROM projects WHERE id = ?1", PROJECT_SELECT_COLUMNS))?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM projects WHERE id = ?1",
+        PROJECT_SELECT_COLUMNS
+    ))?;
     let mut rows = stmt.query_map(params![id], row_to_project)?;
     match rows.next() {
         Some(Ok(p)) => Ok(Some(p)),
@@ -423,14 +434,24 @@ pub fn get_project_by_id(conn: &Connection, id: &str) -> Result<Option<Project>>
 }
 
 pub fn delete_project(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("DELETE FROM task_messages WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?1)", params![id])?;
-    conn.execute("DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?1)", params![id])?;
+    conn.execute(
+        "DELETE FROM task_messages WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?1)",
+        params![id],
+    )?;
+    conn.execute(
+        "DELETE FROM task_logs WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?1)",
+        params![id],
+    )?;
     conn.execute("DELETE FROM tasks WHERE project_id = ?1", params![id])?;
     conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
     Ok(())
 }
 
-pub fn update_project_system_prompt(conn: &Connection, id: &str, system_prompt: Option<&str>) -> Result<()> {
+pub fn update_project_system_prompt(
+    conn: &Connection,
+    id: &str,
+    system_prompt: Option<&str>,
+) -> Result<()> {
     conn.execute(
         "UPDATE projects SET system_prompt = ?1 WHERE id = ?2",
         params![system_prompt, id],
@@ -438,7 +459,14 @@ pub fn update_project_system_prompt(conn: &Connection, id: &str, system_prompt: 
     Ok(())
 }
 
-pub fn create_task(conn: &Connection, project_id: &str, title: &str, description: &str, tag: Option<&str>, model: Option<&str>, max_tokens: Option<i32>) -> Result<Task> {
+pub fn create_task(
+    conn: &Connection,
+    project_id: &str,
+    title: &str,
+    description: &str,
+    tag: Option<&str>,
+    model: Option<&str>,
+) -> Result<Task> {
     let max_order: i32 = conn.query_row(
         "SELECT COALESCE(MAX(sort_order), -1) FROM tasks WHERE project_id = ?1",
         params![project_id],
@@ -456,7 +484,6 @@ pub fn create_task(conn: &Connection, project_id: &str, title: &str, description
         exit_code: None,
         max_turns: None,
         model: model.map(|m| m.to_string()),
-        max_tokens,
         input_tokens: None,
         output_tokens: None,
         provider: None,
@@ -466,8 +493,8 @@ pub fn create_task(conn: &Connection, project_id: &str, title: &str, description
         updated_at: Some(Utc::now().to_rfc3339()),
     };
     conn.execute(
-        "INSERT INTO tasks (id, project_id, title, description, tag, status, sort_order, model, max_tokens, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        params![task.id, task.project_id, task.title, task.description, task.tag, task.status, task.sort_order, task.model, task.max_tokens, task.created_at, task.updated_at],
+        "INSERT INTO tasks (id, project_id, title, description, tag, status, sort_order, model, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![task.id, task.project_id, task.title, task.description, task.tag, task.status, task.sort_order, task.model, task.created_at, task.updated_at],
     )?;
     Ok(task)
 }
@@ -477,7 +504,9 @@ pub fn get_tasks(conn: &Connection, project_id: &str) -> Result<Vec<Task>> {
         "SELECT {} FROM tasks WHERE project_id = ?1 ORDER BY sort_order ASC",
         TASK_SELECT_COLUMNS
     ))?;
-    let tasks = stmt.query_map(params![project_id], row_to_task)?.collect::<Result<Vec<_>>>()?;
+    let tasks = stmt
+        .query_map(params![project_id], row_to_task)?
+        .collect::<Result<Vec<_>>>()?;
     Ok(tasks)
 }
 
@@ -494,19 +523,34 @@ pub fn get_task_by_id(conn: &Connection, id: &str) -> Result<Option<Task>> {
     }
 }
 
-pub fn update_task(conn: &Connection, id: &str, title: Option<&str>, description: Option<&str>, tag: Option<Option<&str>>) -> Result<Task> {
+pub fn update_task(
+    conn: &Connection,
+    id: &str,
+    title: Option<&str>,
+    description: Option<&str>,
+    tag: Option<Option<&str>>,
+) -> Result<Task> {
     if let Some(t) = title {
         conn.execute("UPDATE tasks SET title = ?1 WHERE id = ?2", params![t, id])?;
     }
     if let Some(d) = description {
-        conn.execute("UPDATE tasks SET description = ?1 WHERE id = ?2", params![d, id])?;
+        conn.execute(
+            "UPDATE tasks SET description = ?1 WHERE id = ?2",
+            params![d, id],
+        )?;
     }
     if let Some(t) = tag {
         conn.execute("UPDATE tasks SET tag = ?1 WHERE id = ?2", params![t, id])?;
     }
     let now = Utc::now().to_rfc3339();
-    conn.execute("UPDATE tasks SET updated_at = ?1 WHERE id = ?2", params![now, id])?;
-    let mut stmt = conn.prepare(&format!("SELECT {} FROM tasks WHERE id = ?1", TASK_SELECT_COLUMNS))?;
+    conn.execute(
+        "UPDATE tasks SET updated_at = ?1 WHERE id = ?2",
+        params![now, id],
+    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM tasks WHERE id = ?1",
+        TASK_SELECT_COLUMNS
+    ))?;
     stmt.query_row(params![id], row_to_task)
 }
 
@@ -517,13 +561,21 @@ pub fn delete_task(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn move_task(conn: &Connection, id: &str, new_status: &str, new_sort_order: i32) -> Result<Task> {
+pub fn move_task(
+    conn: &Connection,
+    id: &str,
+    new_status: &str,
+    new_sort_order: i32,
+) -> Result<Task> {
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE tasks SET status = ?1, sort_order = ?2, updated_at = ?3 WHERE id = ?4",
         params![new_status, new_sort_order, now, id],
     )?;
-    let mut stmt = conn.prepare(&format!("SELECT {} FROM tasks WHERE id = ?1", TASK_SELECT_COLUMNS))?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM tasks WHERE id = ?1",
+        TASK_SELECT_COLUMNS
+    ))?;
     stmt.query_row(params![id], row_to_task)
 }
 
@@ -559,7 +611,12 @@ pub fn get_next_queued_task(conn: &Connection, project_id: &str) -> Result<Optio
     }
 }
 
-pub fn add_task_log(conn: &Connection, task_id: &str, content: &str, log_type: &str) -> Result<TaskLog> {
+pub fn add_task_log(
+    conn: &Connection,
+    task_id: &str,
+    content: &str,
+    log_type: &str,
+) -> Result<TaskLog> {
     let log = TaskLog {
         id: Uuid::new_v4().to_string(),
         task_id: task_id.to_string(),
@@ -578,19 +635,27 @@ pub fn get_task_logs(conn: &Connection, task_id: &str) -> Result<Vec<TaskLog>> {
     let mut stmt = conn.prepare(
         "SELECT id, task_id, content, log_type, created_at FROM task_logs WHERE task_id = ?1 ORDER BY created_at ASC"
     )?;
-    let logs = stmt.query_map(params![task_id], |row| {
-        Ok(TaskLog {
-            id: row.get(0)?,
-            task_id: row.get(1)?,
-            content: row.get(2)?,
-            log_type: row.get(3)?,
-            created_at: row.get(4)?,
-        })
-    })?.collect::<Result<Vec<_>>>()?;
+    let logs = stmt
+        .query_map(params![task_id], |row| {
+            Ok(TaskLog {
+                id: row.get(0)?,
+                task_id: row.get(1)?,
+                content: row.get(2)?,
+                log_type: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
     Ok(logs)
 }
 
-pub fn add_task_message(conn: &Connection, task_id: &str, role: &str, content: &str, message_type: &str) -> Result<TaskMessage> {
+pub fn add_task_message(
+    conn: &Connection,
+    task_id: &str,
+    role: &str,
+    content: &str,
+    message_type: &str,
+) -> Result<TaskMessage> {
     let message = TaskMessage {
         id: Uuid::new_v4().to_string(),
         task_id: task_id.to_string(),
@@ -610,20 +675,27 @@ pub fn get_task_messages(conn: &Connection, task_id: &str) -> Result<Vec<TaskMes
     let mut stmt = conn.prepare(
         "SELECT id, task_id, role, content, message_type, created_at FROM task_messages WHERE task_id = ?1 ORDER BY created_at ASC"
     )?;
-    let messages = stmt.query_map(params![task_id], |row| {
-        Ok(TaskMessage {
-            id: row.get(0)?,
-            task_id: row.get(1)?,
-            role: row.get(2)?,
-            content: row.get(3)?,
-            message_type: row.get(4)?,
-            created_at: row.get(5)?,
-        })
-    })?.collect::<Result<Vec<_>>>()?;
+    let messages = stmt
+        .query_map(params![task_id], |row| {
+            Ok(TaskMessage {
+                id: row.get(0)?,
+                task_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                message_type: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
     Ok(messages)
 }
 
-pub fn add_project_message(conn: &Connection, project_id: &str, role: &str, content: &str) -> Result<ProjectMessage> {
+pub fn add_project_message(
+    conn: &Connection,
+    project_id: &str,
+    role: &str,
+    content: &str,
+) -> Result<ProjectMessage> {
     let message = ProjectMessage {
         id: Uuid::new_v4().to_string(),
         project_id: project_id.to_string(),
@@ -642,34 +714,41 @@ pub fn get_project_messages(conn: &Connection, project_id: &str) -> Result<Vec<P
     let mut stmt = conn.prepare(
         "SELECT id, project_id, role, content, created_at FROM project_messages WHERE project_id = ?1 ORDER BY created_at ASC"
     )?;
-    let messages = stmt.query_map(params![project_id], |row| {
-        Ok(ProjectMessage {
-            id: row.get(0)?,
-            project_id: row.get(1)?,
-            role: row.get(2)?,
-            content: row.get(3)?,
-            created_at: row.get(4)?,
-        })
-    })?.collect::<Result<Vec<_>>>()?;
+    let messages = stmt
+        .query_map(params![project_id], |row| {
+            Ok(ProjectMessage {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
     Ok(messages)
 }
 
 pub fn clear_project_messages(conn: &Connection, project_id: &str) -> Result<()> {
-    conn.execute("DELETE FROM project_messages WHERE project_id = ?1", params![project_id])?;
+    conn.execute(
+        "DELETE FROM project_messages WHERE project_id = ?1",
+        params![project_id],
+    )?;
     Ok(())
 }
 
 pub fn get_templates(conn: &Connection) -> Result<Vec<PromptTemplate>> {
     let mut stmt = conn.prepare("SELECT id, name, content, created_at, updated_at FROM prompt_templates ORDER BY created_at ASC")?;
-    let templates = stmt.query_map([], |row| {
-        Ok(PromptTemplate {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            content: row.get(2)?,
-            created_at: row.get(3)?,
-            updated_at: row.get(4)?,
-        })
-    })?.collect::<Result<Vec<_>>>()?;
+    let templates = stmt
+        .query_map([], |row| {
+            Ok(PromptTemplate {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                content: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
     Ok(templates)
 }
 
@@ -689,13 +768,20 @@ pub fn create_template(conn: &Connection, name: &str, content: &str) -> Result<P
     Ok(template)
 }
 
-pub fn update_template(conn: &Connection, id: &str, name: &str, content: &str) -> Result<PromptTemplate> {
+pub fn update_template(
+    conn: &Connection,
+    id: &str,
+    name: &str,
+    content: &str,
+) -> Result<PromptTemplate> {
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE prompt_templates SET name = ?1, content = ?2, updated_at = ?3 WHERE id = ?4",
         params![name, content, now, id],
     )?;
-    let mut stmt = conn.prepare("SELECT id, name, content, created_at, updated_at FROM prompt_templates WHERE id = ?1")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, name, content, created_at, updated_at FROM prompt_templates WHERE id = ?1",
+    )?;
     stmt.query_row(params![id], |row| {
         Ok(PromptTemplate {
             id: row.get(0)?,
@@ -713,7 +799,12 @@ pub fn delete_template(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn set_task_token_usage(conn: &Connection, id: &str, input_tokens: i64, output_tokens: i64) -> Result<()> {
+pub fn set_task_token_usage(
+    conn: &Connection,
+    id: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+) -> Result<()> {
     conn.execute(
         "UPDATE tasks SET input_tokens = ?1, output_tokens = ?2 WHERE id = ?3",
         params![input_tokens, output_tokens, id],
@@ -733,14 +824,6 @@ pub fn update_task_model(conn: &Connection, id: &str, model: Option<&str>) -> Re
     conn.execute(
         "UPDATE tasks SET model = ?1, updated_at = ?2 WHERE id = ?3",
         params![model, Utc::now().to_rfc3339(), id],
-    )?;
-    get_task_by_id(conn, id)?.ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)
-}
-
-pub fn update_task_max_tokens(conn: &Connection, id: &str, max_tokens: Option<i32>) -> Result<Task> {
-    conn.execute(
-        "UPDATE tasks SET max_tokens = ?1, updated_at = ?2 WHERE id = ?3",
-        params![max_tokens, Utc::now().to_rfc3339(), id],
     )?;
     get_task_by_id(conn, id)?.ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)
 }
@@ -793,17 +876,19 @@ pub fn get_usage_stats(conn: &Connection) -> Result<Vec<ProviderUsageStats>> {
         FROM tasks
         WHERE status IN ('done', 'failed')
         GROUP BY COALESCE(provider, 'claude')
-        ORDER BY provider ASC"
+        ORDER BY provider ASC",
     )?;
-    let stats = stmt.query_map([], |row| {
-        Ok(ProviderUsageStats {
-            provider: row.get(0)?,
-            total_tasks: row.get(1)?,
-            completed_tasks: row.get(2)?,
-            failed_tasks: row.get(3)?,
-            total_input_tokens: row.get(4)?,
-            total_output_tokens: row.get(5)?,
-        })
-    })?.collect::<Result<Vec<_>>>()?;
+    let stats = stmt
+        .query_map([], |row| {
+            Ok(ProviderUsageStats {
+                provider: row.get(0)?,
+                total_tasks: row.get(1)?,
+                completed_tasks: row.get(2)?,
+                failed_tasks: row.get(3)?,
+                total_input_tokens: row.get(4)?,
+                total_output_tokens: row.get(5)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
     Ok(stats)
 }

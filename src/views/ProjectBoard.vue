@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useTaskStore } from '../stores/taskStore'
 import { useProjectStore } from '../stores/projectStore'
 import KanbanColumn from '../components/KanbanColumn.vue'
-import TaskCard from '../components/TaskCard.vue'
 import TaskDetail from '../components/TaskDetail.vue'
 import AddTaskDialog from '../components/AddTaskDialog.vue'
 import IdeaChat from '../components/IdeaChat.vue'
@@ -27,10 +26,8 @@ const loadedTemplateName = ref<string | null>(null)
 const selectedTask = ref<Task | null>(null)
 const selectedTaskFocus = ref<'details' | 'chat'>('details')
 const queueRunning = ref(false)
-const outputEl = ref<HTMLElement | null>(null)
 const isGit = ref<boolean | null>(null)
 const initingGit = ref(false)
-const outputMaximized = ref(false)
 const gitInfo = ref<{ branch: string; changes: number; commits: { hash: string; message: string }[] } | null>(null)
 // Progress bar state
 const taskStartTime = ref<number | null>(null)
@@ -87,7 +84,6 @@ async function initGit() {
 
 async function loadProject() {
   queueRunning.value = false
-  outputMaximized.value = false
   stopProgressTracking(false)
   checkGitStatus()
   loadGitInfo()
@@ -130,7 +126,13 @@ listen<{ project_id: string }>('queue-stopped', (event) => {
 watch(projectId, loadProject)
 
 const queuedTasks = computed(() =>
-  taskStore.tasks.filter(t => t.status === 'queued' || t.status === 'backlog').sort((a, b) => a.sort_order - b.sort_order)
+  taskStore.tasks
+    .filter(t => t.status === 'queued' || t.status === 'backlog' || t.status === 'in_progress')
+    .sort((a, b) => {
+      if (a.status === 'in_progress') return -1
+      if (b.status === 'in_progress') return 1
+      return a.sort_order - b.sort_order
+    })
 )
 const runningTask = computed(() =>
   taskStore.tasks.find(t => t.status === 'in_progress') ?? null
@@ -160,13 +162,6 @@ const liveOutput = computed(() => {
   return taskStore.liveLogs[runningTask.value.id] || []
 })
 
-// Auto-scroll output
-watch(() => liveOutput.value.length, async () => {
-  if (outputEl.value) {
-    await nextTick()
-    outputEl.value.scrollTop = outputEl.value.scrollHeight
-  }
-})
 
 // Progress bar watchers (must be after runningTask/liveOutput computed declarations)
 watch(runningTask, (newVal, oldVal) => {
@@ -263,44 +258,12 @@ watch(
   { deep: true },
 )
 
-// Split resizer state
-const splitRatio = ref(0.4)
-const isDragging = ref(false)
-const splitContainerEl = ref<HTMLElement | null>(null)
-
 // Combined history for Done/Failed column
 const historyTasks = computed(() =>
   taskStore.tasks
     .filter(t => t.status === 'done' || t.status === 'failed')
     .sort((a, b) => new Date(b.completed_at ?? 0).getTime() - new Date(a.completed_at ?? 0).getTime())
 )
-
-function onDividerMouseDown(e: MouseEvent) {
-  e.preventDefault()
-  isDragging.value = true
-  const startY = e.clientY
-  const startRatio = splitRatio.value
-
-  function onMouseMove(ev: MouseEvent) {
-    if (!splitContainerEl.value) return
-    const rect = splitContainerEl.value.getBoundingClientRect()
-    const deltaRatio = (ev.clientY - startY) / rect.height
-    splitRatio.value = Math.min(0.7, Math.max(0.2, startRatio + deltaRatio))
-  }
-
-  function onMouseUp() {
-    isDragging.value = false
-    document.removeEventListener('mousemove', onMouseMove)
-    document.removeEventListener('mouseup', onMouseUp)
-    document.body.style.cursor = ''
-    document.body.style.userSelect = ''
-  }
-
-  document.body.style.cursor = 'row-resize'
-  document.body.style.userSelect = 'none'
-  document.addEventListener('mousemove', onMouseMove)
-  document.addEventListener('mouseup', onMouseUp)
-}
 
 </script>
 
@@ -362,137 +325,65 @@ function onDividerMouseDown(e: MouseEvent) {
         </button>
       </div>
 
-      <!-- Split container: execution monitor + divider + task board -->
-      <div ref="splitContainerEl" class="split-container">
-        <!-- Execution Monitor (top) -->
-        <div class="execution-monitor" :class="{ 'monitor-running': runningTask }" :style="{ height: (splitRatio * 100) + '%' }">
-          <div class="monitor-content">
-            <!-- Left: task info -->
-            <div class="monitor-left">
-              <div class="monitor-status-line">
-                <template v-if="runningTask">
-                  <span class="running-dot"></span>
-                  <span class="running-label">Running</span>
-                </template>
-                <template v-else>
-                  <span class="idle-label">Idle</span>
-                </template>
-                <button v-if="runningTask" class="cancel-btn" @click="cancelTask" title="Cancel task">
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                  </svg>
-                  Cancel
-                </button>
-              </div>
-              <div v-if="runningTask" class="progress-track">
-                <div class="progress-fill" :style="{ width: progress + '%' }"></div>
-              </div>
-              <div v-if="runningTask" class="monitor-task-card">
-                <TaskCard :task="runningTask" @open-detail="openDetail(runningTask!)" />
-              </div>
-              <div v-else class="monitor-idle">
-                <span>Queue tasks and hit play</span>
-              </div>
-            </div>
-            <!-- Right: output -->
-            <div class="monitor-right">
-              <div class="monitor-output-header">
-                <span class="monitor-output-label">Output</span>
-                <button class="expand-btn" @click="outputMaximized = !outputMaximized" :title="outputMaximized ? 'Collapse' : 'Expand'">
-                  <svg v-if="!outputMaximized" width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path d="M7.5 1H11V4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M4.5 11H1V7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                  <svg v-else width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path d="M4.5 1V4.5H1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M7.5 11V7.5H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                </button>
-              </div>
-              <div ref="outputEl" class="current-output">
-                <template v-if="runningTask">
-                  <div v-for="(line, i) in liveOutput" :key="i" class="output-line">{{ line }}</div>
-                  <span class="output-cursor"></span>
-                </template>
-                <div v-else class="output-empty">Output will appear here when a task is running.</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Resizable divider -->
-        <div class="split-divider" :class="{ dragging: isDragging }" @mousedown="onDividerMouseDown"></div>
-
-        <!-- Task Board (bottom) — 3 columns -->
-        <div class="task-board">
-          <div class="board-columns">
-            <IdeaChat :project-id="projectId" />
-            <KanbanColumn title="Queue" status="queued" :tasks="queuedTasks" :allow-drag="true" :deletable="true" @task-moved="handleTaskMoved" @open-detail="openDetail" @delete-task="handleDeleteTask">
-              <template #actions>
-                <button class="col-btn" @click="showAddDialog = true" title="Add task">
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path d="M6 1.5V10.5M1.5 6H10.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-                  </svg>
-                </button>
-                <button class="col-btn" :class="queueRunning ? 'col-btn-stop' : 'col-btn-start'" @click="toggleQueue" :title="queueRunning ? 'Stop queue' : 'Start queue'">
-                  <svg v-if="!queueRunning" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 2L10 6L3 10V2Z" fill="currentColor"/></svg>
-                  <svg v-else width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="currentColor"/></svg>
-                </button>
-              </template>
-            </KanbanColumn>
-            <!-- Done / Failed column -->
-            <div class="kanban-column column-history">
-              <div class="column-header">
-                <div class="column-header-left">
-                  <span class="column-title">History</span>
-                  <span class="column-count">{{ historyCount }}</span>
-                </div>
-              </div>
-              <div class="history-list">
-                <div v-if="historyTasks.length === 0" class="empty-hint">No completed tasks yet</div>
-                <div v-for="task in historyTasks" :key="task.id" class="history-row" @click="openDetail(task)">
-                  <svg v-if="task.status === 'done'" width="12" height="12" viewBox="0 0 12 12" fill="none" class="history-icon history-icon-done">
-                    <path d="M2.5 6L5 8.5L9.5 3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                  <svg v-else width="12" height="12" viewBox="0 0 12 12" fill="none" class="history-icon history-icon-failed">
-                    <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-                  </svg>
-                  <span class="history-row-name">{{ task.title }}</span>
-                  <div v-if="task.status === 'failed'" class="history-row-actions">
-                    <button class="history-action-btn" @click.stop="retryTask(task.id)">Retry</button>
-                    <button class="history-action-btn" @click.stop="moveToBacklog(task.id)">Queue</button>
-                  </div>
-                  <span class="history-row-time">{{ formatTimestamp(task.completed_at) }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Maximized output overlay -->
-      <div v-if="outputMaximized" class="output-maximized-overlay">
-        <div class="output-max-header">
-          <span class="monitor-output-label">Output</span>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <template v-if="runningTask">
-              <span class="running-dot"></span>
-              <span class="running-label">Running</span>
+      <!-- Task Board — 3 columns -->
+      <div class="task-board">
+        <div class="board-columns">
+          <IdeaChat :project-id="projectId" />
+          <KanbanColumn
+            title="Queue"
+            status="queued"
+            :tasks="queuedTasks"
+            :allow-drag="true"
+            :deletable="true"
+            :running-task-id="runningTask?.id"
+            :running-output="runningTask ? (taskStore.liveLogs[runningTask.id]?.[taskStore.liveLogs[runningTask.id].length - 1] ?? '') : ''"
+            @task-moved="handleTaskMoved"
+            @open-detail="openDetail"
+            @delete-task="handleDeleteTask"
+          >
+            <template #actions>
+              <button class="col-btn" @click="showAddDialog = true" title="Add task">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M6 1.5V10.5M1.5 6H10.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <button v-if="runningTask" class="col-btn col-btn-cancel" @click="cancelTask" title="Cancel running task">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <button v-else class="col-btn" :class="queueRunning ? 'col-btn-stop' : 'col-btn-start'" @click="toggleQueue" :title="queueRunning ? 'Stop queue' : 'Start queue'">
+                <svg v-if="!queueRunning" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 2L10 6L3 10V2Z" fill="currentColor"/></svg>
+                <svg v-else width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="currentColor"/></svg>
+              </button>
             </template>
-            <button class="expand-btn" @click="outputMaximized = false" title="Collapse">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M4.5 1V4.5H1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M7.5 11V7.5H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
+          </KanbanColumn>
+          <!-- Done / Failed column -->
+          <div class="kanban-column column-history">
+            <div class="column-header">
+              <div class="column-header-left">
+                <span class="column-title">History</span>
+                <span class="column-count">{{ historyCount }}</span>
+              </div>
+            </div>
+            <div class="history-list">
+              <div v-if="historyTasks.length === 0" class="empty-hint">No completed tasks yet</div>
+              <div v-for="task in historyTasks" :key="task.id" class="history-row" @click="openDetail(task)">
+                <svg v-if="task.status === 'done'" width="12" height="12" viewBox="0 0 12 12" fill="none" class="history-icon history-icon-done">
+                  <path d="M2.5 6L5 8.5L9.5 3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <svg v-else width="12" height="12" viewBox="0 0 12 12" fill="none" class="history-icon history-icon-failed">
+                  <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                </svg>
+                <span class="history-row-name">{{ task.title }}</span>
+                <div v-if="task.status === 'failed'" class="history-row-actions">
+                  <button class="history-action-btn" @click.stop="retryTask(task.id)">Retry</button>
+                  <button class="history-action-btn" @click.stop="moveToBacklog(task.id)">Queue</button>
+                </div>
+                <span class="history-row-time">{{ formatTimestamp(task.completed_at) }}</span>
+              </div>
+            </div>
           </div>
-        </div>
-        <div ref="outputEl" class="current-output output-max-content">
-          <template v-if="runningTask">
-            <div v-for="(line, i) in liveOutput" :key="i" class="output-line">{{ line }}</div>
-            <span class="output-cursor"></span>
-          </template>
-          <div v-else class="output-empty">Output will appear here when a task is running.</div>
         </div>
       </div>
     </template>
@@ -565,53 +456,8 @@ function onDividerMouseDown(e: MouseEvent) {
 .git-init-btn:hover { background: var(--hover-overlay); border-color: var(--border-hover); }
 .git-init-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* Split container — single unified box */
-.split-container { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-xs); }
-
-/* Execution monitor */
-.execution-monitor { flex: none; display: flex; flex-direction: column; background: transparent; overflow: hidden; min-height: 120px; }
-/* Pulse border applied to the split-container when running */
-.split-container:has(.monitor-running) { border-color: #a78bfa; animation: pulse-border 1.5s ease-in-out infinite; }
-@keyframes pulse-border {
-  0%, 100% { border-color: #a78bfa; }
-  50% { border-color: #6366f1; }
-}
-.monitor-content { flex: 1; display: flex; min-height: 0; }
-.monitor-left { width: 240px; flex-shrink: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); padding: 12px 14px; gap: 10px; }
-.monitor-status-line { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.running-dot { width: 8px; height: 8px; border-radius: 50%; background: #a78bfa; animation: pulse-dot 1.4s ease-in-out infinite; }
-@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-.running-label { font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #c084fc; }
-.idle-label { font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); }
-.cancel-btn { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 3px 10px; border: none; border-radius: 4px; background: transparent; color: var(--text-secondary); font-family: inherit; font-size: 0.6875rem; font-weight: 500; cursor: pointer; flex-shrink: 0; transition: color 0.15s ease, background 0.15s ease; }
-.cancel-btn:hover { color: #f87171; background: rgba(248, 113, 113, 0.15); }
-
-/* Progress bar */
-.progress-track { height: 4px; background: rgba(168, 85, 247, 0.15); overflow: hidden; flex-shrink: 0; }
-.progress-fill { height: 100%; background: #a78bfa; transition: width 0.6s ease-out; border-radius: 0 2px 2px 0; }
-.monitor-task-card { flex: 1; min-height: 0; overflow-y: auto; }
-.monitor-task-card :deep(.task-card) { margin: 0; box-shadow: none; }
-.monitor-idle { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 0.75rem; }
-
-/* Monitor right (output) */
-.monitor-right { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.monitor-output-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.monitor-output-label { font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); }
-.expand-btn { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; border-radius: 4px; background: transparent; color: var(--text-secondary); cursor: pointer; flex-shrink: 0; transition: color 0.15s ease, background 0.15s ease; }
-.expand-btn:hover { color: #c084fc; background: rgba(168, 85, 247, 0.1); }
-.current-output { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 14px; font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 0.6875rem; line-height: 1.6; background: var(--bg-terminal); }
-.output-line { color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; }
-.output-cursor { display: inline-block; width: 6px; height: 12px; background: #a78bfa; animation: blink 1s step-end infinite; }
-@keyframes blink { 0%, 100% { opacity: 0.7; } 50% { opacity: 0; } }
-.output-empty { color: var(--text-secondary); font-family: inherit; font-size: 0.6875rem; }
-
-/* Split divider */
-.split-divider { height: 5px; flex-shrink: 0; cursor: row-resize; position: relative; user-select: none; background: var(--border); transition: background 0.15s ease; }
-.split-divider::after { content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 40px; height: 3px; border-radius: 2px; background: var(--text-muted); opacity: 0.3; transition: opacity 0.15s ease, background 0.15s ease, box-shadow 0.15s ease; z-index: 1; }
-.split-divider:hover::after, .split-divider.dragging::after { background: #a78bfa; opacity: 1; }
-
 /* Task board */
-.task-board { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.task-board { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-xs); }
 .board-columns { display: grid; grid-template-columns: 1.2fr 1fr 0.9fr; flex: 1; min-height: 0; overflow: hidden; }
 .board-columns > :deep(.kanban-column),
 .board-columns > :deep(.idea-chat),
@@ -628,6 +474,8 @@ function onDividerMouseDown(e: MouseEvent) {
 .col-btn-start:hover { color: #4ade80; background: rgba(74, 222, 128, 0.15); }
 .col-btn-stop { color: #f87171; }
 .col-btn-stop:hover { color: #f87171; background: rgba(248, 113, 113, 0.15); }
+.col-btn-cancel { color: #f87171; }
+.col-btn-cancel:hover { color: #f87171; background: rgba(248, 113, 113, 0.15); }
 
 /* Done/Failed column */
 .column-history { display: flex; flex-direction: column; background: transparent; border: none; border-radius: 0; overflow: hidden; }
@@ -647,11 +495,6 @@ function onDividerMouseDown(e: MouseEvent) {
 .history-action-btn { border: none; background: transparent; color: var(--text-secondary); font-family: inherit; font-size: 0.6875rem; font-weight: 500; cursor: pointer; padding: 1px 6px; border-radius: 3px; transition: color 0.15s ease, background 0.15s ease; flex-shrink: 0; }
 .history-action-btn:hover { color: #c084fc; background: rgba(168, 85, 247, 0.12); }
 .history-row-time { font-size: 0.6875rem; color: var(--text-muted); flex-shrink: 0; white-space: nowrap; }
-
-/* Maximized output overlay */
-.output-maximized-overlay { position: fixed; inset: 0; z-index: 90; background: var(--bg-base); display: flex; flex-direction: column; }
-.output-max-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--bg-card); flex-shrink: 0; }
-.output-max-content { flex: 1; border-radius: 0; }
 
 /* Template modal */
 .template-modal { width: 100%; max-width: 420px; }

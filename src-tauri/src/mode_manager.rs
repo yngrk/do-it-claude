@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 fn backup_dir(app_dir: &Path, project_id: &str) -> PathBuf {
     app_dir.join("backups").join(project_id)
@@ -37,7 +37,12 @@ pub fn list_presets(app_dir: &Path) -> Result<Vec<String>, String> {
 }
 
 /// Load a preset: backup project config, then copy preset folder contents into project
-pub fn load_preset(app_dir: &Path, project_id: &str, project_path: &Path, preset_name: &str) -> Result<(), String> {
+pub fn load_preset(
+    app_dir: &Path,
+    project_id: &str,
+    project_path: &Path,
+    preset_name: &str,
+) -> Result<(), String> {
     let src = presets_dir(app_dir).join(preset_name);
     if !src.exists() {
         return Err(format!("Preset '{}' not found", preset_name));
@@ -57,7 +62,9 @@ pub fn load_preset(app_dir: &Path, project_id: &str, project_path: &Path, preset
 /// List available skills (folder names in skills/)
 pub fn list_skills(app_dir: &Path) -> Result<Vec<String>, String> {
     let dir = skills_dir(app_dir);
-    if !dir.exists() { return Ok(vec![]); }
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
     let mut names = Vec::new();
     for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -74,7 +81,9 @@ pub fn list_skills(app_dir: &Path) -> Result<Vec<String>, String> {
 /// List available agents (.md files in agents/)
 pub fn list_agents(app_dir: &Path) -> Result<Vec<String>, String> {
     let dir = agents_dir(app_dir);
-    if !dir.exists() { return Ok(vec![]); }
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
     let mut names = Vec::new();
     for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -149,11 +158,26 @@ pub fn seed_defaults(app_dir: &Path) {
     if !default_preset.exists() {
         let _ = fs::create_dir_all(default_preset.join(".claude").join("agents"));
         let _ = fs::write(default_preset.join("CLAUDE.md"), DEFAULT_CLAUDE_MD);
-        let _ = fs::write(default_preset.join(".claude/agents/coder.md"), DEFAULT_AGENT_CODER);
-        let _ = fs::write(default_preset.join(".claude/agents/reviewer.md"), DEFAULT_AGENT_REVIEWER);
-        let _ = fs::write(default_preset.join(".claude/agents/tester.md"), DEFAULT_AGENT_TESTER);
-        let _ = fs::write(default_preset.join(".claude/agents/researcher.md"), DEFAULT_AGENT_RESEARCHER);
-        let _ = fs::write(default_preset.join(".claude/agents/architect.md"), DEFAULT_AGENT_ARCHITECT);
+        let _ = fs::write(
+            default_preset.join(".claude/agents/coder.md"),
+            DEFAULT_AGENT_CODER,
+        );
+        let _ = fs::write(
+            default_preset.join(".claude/agents/reviewer.md"),
+            DEFAULT_AGENT_REVIEWER,
+        );
+        let _ = fs::write(
+            default_preset.join(".claude/agents/tester.md"),
+            DEFAULT_AGENT_TESTER,
+        );
+        let _ = fs::write(
+            default_preset.join(".claude/agents/researcher.md"),
+            DEFAULT_AGENT_RESEARCHER,
+        );
+        let _ = fs::write(
+            default_preset.join(".claude/agents/architect.md"),
+            DEFAULT_AGENT_ARCHITECT,
+        );
     }
 
     // Seed individual agents
@@ -180,7 +204,11 @@ pub fn seed_defaults(app_dir: &Path) {
 
 // --- Internal helpers ---
 
-fn backup_project_config(app_dir: &Path, project_id: &str, project_path: &Path) -> Result<(), String> {
+fn backup_project_config(
+    app_dir: &Path,
+    project_id: &str,
+    project_path: &Path,
+) -> Result<(), String> {
     let backup = backup_dir(app_dir, project_id);
     fs::create_dir_all(&backup).map_err(|e| format!("Failed to create backup dir: {}", e))?;
 

@@ -1,9 +1,9 @@
-mod db;
 mod commands;
-mod executor;
-mod pty;
-mod mode_manager;
 mod context_generator;
+mod db;
+mod executor;
+mod mode_manager;
+mod pty;
 
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -16,7 +16,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            let app_dir = app.path().app_data_dir().expect("failed to get app data dir");
+            let app_dir = app
+                .path()
+                .app_data_dir()
+                .expect("failed to get app data dir");
             std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
 
             let conn = db::init_db(&app_dir).expect("failed to initialize database");
@@ -84,7 +87,6 @@ pub fn run() {
             commands::import_claude_file,
             commands::update_task_max_turns,
             commands::update_task_model,
-            commands::update_task_max_tokens,
             commands::estimate_task_turns,
             commands::estimate_task_tokens,
             commands::get_setting,
